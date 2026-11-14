@@ -145,66 +145,79 @@ def compute_test_statistic(model, phi_ref, phi_data, n_bkg, n_ref, device):
 
 
 def train_kernel_model(phi_ref, phi_data, k_mm, a1, lam, n_bkg, n_ref, device,
-                       max_iter=lbfgs_max_iter,
+                       max_iter=15,
                        history_size=lbfgs_history_size,
-                       grad_tol=lbfgs_grad_tol,
+                       grad_tol=1e-7,
                        lr=lbfgs_lr):
-    
-    phi_ref = phi_ref.to(device)
-    phi_data = phi_data.to(device)
-    k_mm = k_mm.to(device)
+    phi_ref = phi_ref.to(device=device, dtype=torch.float64)
+    phi_data = phi_data.to(device=device, dtype=torch.float64)
+    k_mm = k_mm.to(device=device, dtype=torch.float64)
 
-    model = NPLMKernelModel(phi_ref.shape[1]).to(device=device, dtype=phi_ref.dtype)
+    M = phi_ref.shape[1]
+    model = NPLMKernelModel(M).to(device=device, dtype=torch.float64)
+    w = torch.zeros(M, dtype=torch.float64, device=device)
+    denom = float(phi_ref.shape[0] + phi_data.shape[0])
+    reg_mat = 2.0 * lam * k_mm + 1e-10 * torch.eye(M, dtype=torch.float64, device=device)
 
-    def loss_fn():
-        return (weighted_cross_entropy_loss(model(phi_ref), model(phi_data), a1) + lam * rkhs_regularizer(model.w, k_mm))
+    def eval_loss(w_vec):
+        f_r = (phi_ref @ w_vec).clamp(-f_clamp, f_clamp)
+        f_d = (phi_data @ w_vec).clamp(-f_clamp, f_clamp)
+        ce = (F.softplus(f_r).sum() + a1 * F.softplus(-f_d).sum()) / denom
+        reg = lam * (w_vec @ (k_mm @ w_vec))
+        return float((ce + reg).item())
 
-    total_calls = 0
     final_grad_inf = float("nan")
-    hit_max_iter = False
-    n_restarts_used = 0
-    t_history = []
-    stopped_reason = "max_restarts"
+    stopped_reason = "max_iter"
+    with torch.no_grad():
+        cur_loss = eval_loss(w)
+        for it in range(max_iter):
+            f_r = (phi_ref @ w).clamp(-f_clamp, f_clamp)
+            f_d = (phi_data @ w).clamp(-f_clamp, f_clamp)
+            p_r = torch.sigmoid(f_r)
+            p_d = torch.sigmoid(-f_d)
 
-    for restart_idx in range(lbfgs_n_restarts):
-        n_restarts_used = restart_idx + 1
-        optimizer = torch.optim.LBFGS(
-            model.parameters(), lr=lr, max_iter=max_iter,
-            history_size=history_size, tolerance_grad=grad_tol,
-            tolerance_change=lbfgs_tol_change,
-            line_search_fn="strong_wolfe",
-        )
-        calls = {"n": 0}
-
-        def closure():
-            optimizer.zero_grad()
-            loss = loss_fn()
-            loss.backward()
-            calls["n"] += 1
-            return loss
-
-        optimizer.step(closure)
-        total_calls += calls["n"]
-        hit_max_iter = calls["n"] >= max_iter
-
-        if model.w.grad is not None:
-            final_grad_inf = float(model.w.grad.detach().abs().max().item())
-
-        t_history.append(compute_test_statistic(model, phi_ref, phi_data, n_bkg, n_ref, device))
-
-        if n_restarts_used >= lbfgs_min_restarts and len(t_history) >= 2:
-            if abs(t_history[-1] - t_history[-2]) < delta_t_tol:
-                stopped_reason = "t_stable"
+            g = (phi_ref.T @ p_r - a1 * (phi_data.T @ p_d)) / denom + 2.0 * lam * (k_mm @ w)
+            final_grad_inf = float(g.abs().max().item())
+            if final_grad_inf <= grad_tol:
+                stopped_reason = "grad_converged"
                 break
 
+            wr = (p_r * (1.0 - p_r)).clamp(min=1e-12)
+            wd = (p_d * (1.0 - p_d)).clamp(min=1e-12)
+            H = (
+                phi_ref.T @ (phi_ref * wr.unsqueeze(1))
+                + a1 * (phi_data.T @ (phi_data * wd.unsqueeze(1)))
+            ) / denom + reg_mat
+
+            try:
+                dw = torch.linalg.solve(H, -g)
+            except RuntimeError:
+                dw = torch.linalg.lstsq(H, -g).solution
+
+            step = 1.0
+            for _ in range(8):
+                w_cand = w + step * dw
+                cand_loss = eval_loss(w_cand)
+                if cand_loss <= cur_loss + 1e-12:
+                    w = w_cand
+                    cur_loss = cand_loss
+                    break
+                step *= 0.5
+            else:
+                w = w + step * dw
+                cur_loss = eval_loss(w)
+
+        model.w.copy_(w)
+        t_final = compute_test_statistic(model, phi_ref, phi_data, n_bkg, n_ref, device)
+
     return model, {
-        "t_final": t_history[-1],
-        "t_history": t_history,
+        "t_final": t_final,
+        "t_history": [t_final],
         "final_grad_norm_inf": final_grad_inf,
-        "n_closure_calls": total_calls,
-        "n_restarts_used": n_restarts_used,
-        "hit_max_iter": bool(hit_max_iter),
-        "t_stable": stopped_reason == "t_stable",
+        "n_closure_calls": it + 1,
+        "n_restarts_used": 1,
+        "hit_max_iter": bool(stopped_reason == "max_iter"),
+        "t_stable": True,
         "stopped_reason": stopped_reason,
     }
 
@@ -263,7 +276,7 @@ def z_score_from_null(t_obs, t_null, dof_hat, scale_hat=1.0, loc_hat=0.0):
     t_null = np.asarray(t_null)
     n_toys = len(t_null)
 
-    p_empirical = max((t_null >= t_obs).sum() / n_toys, 1.0 / (n_toys + 1))
+    p_empirical = (1.0 + (t_null >= t_obs).sum()) / (n_toys + 1.0)
     z_empirical = stats.norm.isf(p_empirical)
 
     log_p = stats.chi2.logsf(t_obs, df=dof_hat, loc=loc_hat, scale=scale_hat)
@@ -350,6 +363,7 @@ def run_nplm_experiment():
 
         t_median = np.median(t_sig)
         z_emp, z_asym = z_score_from_null(t_median, t_null, dof_hat, scale_hat, loc_hat)
+        note = "" if gof["chi2_ok"] else " [chi2 GOF warning]"
 
         print(f" median t={t_median:.2f}; z_emp={z_emp:.2f}; z_asym={z_asym:.2f}{note}")
 

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.so
+.DS_Store
+paper/template.pdf
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.toc

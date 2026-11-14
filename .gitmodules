@@ -1,0 +1,3 @@
+[submodule "Tokenization-scripts"]
+	path = Tokenization-scripts
+	url = https://github.com/aritradas08/Tokenization-scripts.git

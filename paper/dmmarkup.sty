@@ -1,0 +1,40 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{dmmarkup}[2026/11/13 Collaboration markup macros]
+
+\RequirePackage{xcolor}
+\RequirePackage[most]{tcolorbox}
+
+\providecommand{\ifmarkchanges}{\iffalse}
+
+\newcommand{\dmedit}[1]{\ifmarkchanges\textcolor{red!75!black}{#1}\else #1\fi}
+
+\ifmarkchanges
+  \newtcolorbox{dmbox}[1][]{
+    breakable,
+    enhanced,
+    colback=red!2!white,
+    colframe=red!75!black,
+    boxrule=0.75pt,
+    left=6pt,
+    right=6pt,
+    top=4pt,
+    bottom=4pt,
+    title={#1},
+    fonttitle=\bfseries\small,
+    coltitle=white,
+    colbacktitle=red!75!black
+  }
+  \newcommand{\dmfloat}[1]{%
+    \par\noindent
+    \begingroup
+    \setlength{\fboxsep}{5pt}%
+    \setlength{\fboxrule}{0.85pt}%
+    \fcolorbox{red!75!black}{red!2!white}{%
+      \parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule\relax}{#1}%
+    }%
+    \endgroup\par
+  }
+\else
+  \newenvironment{dmbox}[1][]{}{}
+  \newcommand{\dmfloat}[1]{#1}
+\fi

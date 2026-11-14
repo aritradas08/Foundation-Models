@@ -79,26 +79,33 @@ def event_to_array(df, i):
 
 
 def augment_event(tokens, scaler):
-    # random rotation in the transverse plane + gaussian noise
-    view = tokens.copy()
+    # Kinematically consistent augmentation in physical coordinates before restandardizing:
+    # 1. Random azimuthal rotation in transverse plane (tx, ty)
+    # 2. Additive Gaussian smearing on symlog(d0), symlog(z0)
+    # 3. Multiplicative log-normal momentum smearing p' = p * exp(eps_p) with exact pT' = p' * sin(theta)
+    raw_feat = tokens * scaler.scale_ + scaler.mean_
     tx_idx = track_feat_names.index("tx")
     ty_idx = track_feat_names.index("ty")
-
-    mean = scaler.mean_[[tx_idx, ty_idx]]
-    std = scaler.scale_[[tx_idx, ty_idx]]
-    tx_ty = view[:, [tx_idx, ty_idx]] * std + mean
+    tz_idx = track_feat_names.index("tz")
+    p_idx = track_feat_names.index("p")
+    pt_idx = track_feat_names.index("pt")
+    d0_idx = track_feat_names.index("d0")
+    z0_idx = track_feat_names.index("z0")
 
     angle = np.random.uniform(0, 2 * np.pi)
     c, s = np.cos(angle), np.sin(angle)
     rot = np.array([[c, -s], [s, c]], dtype=np.float32)
-    tx_ty = tx_ty @ rot.T
+    raw_feat[:, [tx_idx, ty_idx]] = raw_feat[:, [tx_idx, ty_idx]] @ rot.T
 
-    view[:, [tx_idx, ty_idx]] = (tx_ty - mean) / std
+    raw_feat[:, d0_idx] += np.random.normal(0.0, noise_std["d0"] * scaler.scale_[d0_idx], size=raw_feat.shape[0])
+    raw_feat[:, z0_idx] += np.random.normal(0.0, noise_std["z0"] * scaler.scale_[z0_idx], size=raw_feat.shape[0])
 
-    for name, sigma in noise_std.items():
-        idx = track_feat_names.index(name)
-        view[:, idx] += np.random.normal(0.0, sigma, size=view.shape[0])
+    sin_theta = np.sqrt(np.clip(1.0 - raw_feat[:, tz_idx] ** 2, 0.0, 1.0))
+    eps_p = np.random.normal(0.0, noise_std["p"], size=raw_feat.shape[0])
+    raw_feat[:, p_idx] = np.maximum(raw_feat[:, p_idx], 1e-6) * np.exp(eps_p)
+    raw_feat[:, pt_idx] = raw_feat[:, p_idx] * sin_theta
 
+    view = (raw_feat - scaler.mean_) / scaler.scale_
     return view.astype(np.float32)
 
 
