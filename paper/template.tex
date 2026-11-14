@@ -1,0 +1,995 @@
+\documentclass{article}
+
+% =========================================================================
+% COLLABORATION MARKUP TOGGLE:
+%   \markchangestrue  -> highlights inline edits (\dmedit) in dark red and
+%                        frames new blocks/tables/figures in red boxes.
+%   \markchangesfalse -> renders an unmarked black manuscript PDF.
+% =========================================================================
+\newif\ifmarkchanges
+\markchangestrue
+
+\usepackage{arxiv}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, allcolors=blue!70!black]{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\graphicspath{ {./images/}{./} }
+\setlength{\marginparwidth}{2cm}
+\usepackage{todonotes}
+\usepackage{subcaption}
+\usepackage{lineno}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+\linenumbers
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{dmmarkup}
+
+\title{\dmedit{Self-Supervised Representation Learning on Full-Event Collider Tracks: Tokenisation, Augmentation Geometry, and Calibrated Anomaly Detection}}
+
+\author{
+ Aritra Das \\
+  Dept. of Physical Sciences\\
+  IISER Kolkata\\
+  Kolkata \\
+  \texttt{\href{mailto:ad21ms144@iiserkol.ac.in}{ad21ms144@iiserkol.ac.in}} \\
+   \And
+ Daniel Thomas Murnane \\
+  \dmedit{Niels Bohr Institute}\\
+  \dmedit{University of Copenhagen}\\
+  Copenhagen \\
+  \texttt{\href{mailto:daniel.murnane@nbi.ku.dk}{daniel.murnane@nbi.ku.dk}} \\
+  \And
+ Shreya Saha \\
+  School of Physics, Chemistry and Earth Sciences\\
+  Adelaide University\\
+  Adelaide \\
+  \texttt{\href{mailto:shreya.saha@adelaide.edu.au}{shreya.saha@adelaide.edu.au}} \\
+}
+
+\begin{document}
+\emergencystretch=1.5em
+\maketitle
+
+\begin{abstract}
+\dmedit{General-purpose representations of full-event charged-particle track collections offer a practical route toward reusable event encoders at the High-Luminosity Large Hadron Collider. Designing self-supervised objectives for variable-length sets of helical trajectories raises three concrete questions: whether discrete vector-quantised track tokenisers match continuous set encoders and deterministic physics summaries across bottleneck dimensions, which coordinate augmentations avoid contrastive shortcuts, and whether representations that maximise Standard Model classification also maximise power in signal-agnostic goodness-of-fit testing. We benchmark 33 track-level representations alongside end-to-end supervised and fine-tuned baselines on $1.95\times 10^6$ zero-pileup simulated proton-proton collisions from ColliderML. A $900,000$-event Standard Model pretraining split and a $1,050,000$-event downstream evaluation split share no events. We first show that a legacy continuous contrastive recipe, with rigid azimuthal rotation and independent noise on momentum and transverse momentum, yields a three-class linear probe accuracy of $61.2\%$ at $D=64$. This is below the $62.4\%$ of an untrained random Set Transformer. Kinematically consistent spherical smearing on a Pre-LN Set Transformer raises accuracy to $68.0\%$, and discrete tokenised contrastive pretraining reaches $68.9\%$. Both exceed deterministic 28-feature track summaries on linear classification. Paired with two-stage fine-tuning, both improve low-label accuracy over training from scratch at $100$ and $1,000$ labelled events. We next verify that an $8192$-code contextual vector-quantised autoencoder uses all codes on Standard Model tracks and retains $97.5\%$ threshold recall on reconstructed displaced tracks with $|d_0| > 1\text{ mm}$. Downstream performance matches before and after quantisation. Finally, using empirically calibrated Kernel New Physics Learning Machine tests, a $2\times 2$ tracking factorial control, multiplicity reweighting, impact-parameter masking, subspace projections, and correlation whitening, we document a task-metric trade-off. Supervised Standard Model encoders concentrate variance into a low-rank subspace, and lead Standard Model classification and Hidden Valley dark-shower detection. Compact tail-preserving representations yield the highest isotropic-kernel sensitivity to displaced Higgs Portal decays: eight-dimensional vector-quantised poolings among neural models, and a six-dimensional displaced-track observable baseline overall.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+\begin{dmbox}[New Section: Introduction]
+High-luminosity proton-proton running at the Large Hadron Collider motivates general-purpose event representations that map variable-length particle sets into reusable latent spaces~\cite{JetCLR,ResimulationSSL,OmniJetAlpha,OmniLearn,MPM,BinnedTokenizationHEP}. Jet-level models take as input tens of constituents inside a single cone~\cite{ParT,OmniJetAlpha,OmniLearn,MPM}, whereas full-event track collections contain up to several hundred helical trajectories reconstructed across the inner detector. Extending self-supervised representation learning to full-event tracking raises three specific methodological questions:
+\begin{enumerate}
+    \item \emph{Continuous versus discrete track encodings.} Reconstructed perigee parameters span several orders of magnitude, from sub-millimetre transverse impact parameters that tag long-lived particle decays to multi-hundred-GeV momenta. Discretising tracks with a Vector-Quantised Variational Autoencoder~\cite{VQVAE} enables token-based pretraining, provided that a codebook fit exclusively on prompt Standard Model events preserves out-of-distribution displaced-track tails.
+    \item \emph{Contrastive augmentation geometry.} In SimCLR-style contrastive pretraining~\cite{SimCLR,JetCLR}, positive pairs are generated by perturbing each event twice. If an augmentation leaves per-track polar angles or relative azimuths invariant across views while breaking kinematic identities such as $p_T = p\sin\theta$, a permutation-invariant Set Transformer~\cite{SetTransformer} can minimise contrastive loss via trivial invariants rather than physical event structure.
+    \item \emph{Supervised probes versus kernel goodness-of-fit discovery.} Pretrained collider embeddings are intended both for supervised transfer classification and for signal-agnostic two-sample testing with the New Physics Learning Machine~\cite{NPLM2019,NPLM2021,KernelNPLM2022,NPLMEmbedding2025}. Whether embeddings optimised for Standard Model class separation outperform compact reconstruction bottlenecks or hand-engineered summary observables under isotropic kernel testing remains an empirical question.
+\end{enumerate}
+
+We address these questions with a paired benchmark on ColliderML Release 1~\cite{ColliderML,ColliderMLDataset} at zero pileup. Pretraining uses $900,000$ unlabelled Standard Model events, and downstream evaluation uses a disjoint $1,050,000$-event sample spanning three Standard Model processes and three Beyond-the-Standard-Model benchmarks. Across 33 fixed-dimensional representations, from-scratch supervised baselines, and fine-tuned encoders, we report five main results:
+\begin{itemize}
+    \item At $D=64$, our legacy continuous contrastive baseline reaches $61.2\%$ three-class linear accuracy. An untrained random Set Transformer reaches $62.4\%$. With a matched $T=128$ control, we trace this failure to the augmentation recipe. We show that kinematically consistent spherical smearing restores monotonic scaling, up to $68.0\%$ linear accuracy.
+    \item We evaluate a contextual $8192$-code track tokeniser, which achieves full codebook usage on Standard Model tracks. It retains $97.5\%$ recall on reconstructed displaced tracks with $|d_0| > 1\text{ mm}$. Contrastive encoders trained on its tokens reach $68.9\%$ three-class linear accuracy at $D=64$.
+    \item We identify and repair a generator-status vertex-stripping defect in the Release 1 Higgs Portal sample, and produce $100,000$ corrected displaced events. A $40,000$-event $2\times 2$ simulation factorial allows us to separate physical vertex displacement from track-seeding field settings.
+    \item We implement a double-precision GPU Newton-Raphson solver for Falkon kernel logistic regression and calibrate conditional empirical thresholds across $10,000$ held-out background toys per representative model, supplemented by low-overlap and multi-reference checks.
+    \item Supervised Standard Model encoders achieve $0.941$ binary ROC-AUC on displaced Higgs Portal events, yet low sensitivity in kernel goodness-of-fit testing at $1\%$ injection. We explain this by combining ROC-tail analysis at false-positive rates down to $10^{-4}$, PCA subspace projections, correlation whitening, and zero-network summary baselines.
+\end{itemize}
+
+Related work is reviewed in Section~\ref{sec:related}. In Section~\ref{sec:dataset} we describe the ColliderML samples, our zero-overlap split, and the Higgs Portal simulation audit. In Section~\ref{sec:rep_learn} we define the representation families and physics baselines. In Section~\ref{sec:validation} we present tokeniser fidelity, latent effective rank, paired downstream probes, and low-label fine-tuning curves. Kernel goodness-of-fit calibration, anomaly detection results, and mechanistic controls are presented in Section~\ref{sec:nplm}, and conclusions follow in Section~\ref{sec:conclusion}.
+\end{dmbox}
+
+\section{Related Work}
+\label{sec:related}
+
+\begin{dmbox}[New Section: Related Work]
+\paragraph{Self-supervised collider representations.}
+Contrastive learning on particle sets was introduced in JetCLR~\cite{JetCLR}, which applied SimCLR~\cite{SimCLR} to jet constituents using rotational symmetries and soft-collinear augmentations. Simulator-driven re-simulation pairs were subsequently proposed in RS3L to ground positive views in parton-shower and detector stochasticity~\cite{ResimulationSSL}, alongside supervised attention backbones such as Particle Transformer~\cite{ParT}. Discrete jet tokenisation and masked particle prediction have since enabled multi-task jet models including binned and VQ-VAE jet tokenisers~\cite{BinnedTokenizationHEP}, OmniJet-$\alpha$~\cite{OmniJetAlpha}, OmniLearn~\cite{OmniLearn}, and Masked Particle Modeling~\cite{MPM}. Whereas those studies focus on jet constituents without perigee impact parameters, we study full-event reconstructed track sets in a $3.0\text{ T}$ solenoidal field where transverse and longitudinal impact parameters carry displaced-vertex information.
+
+\paragraph{Kernel goodness-of-fit anomaly detection.}
+The New Physics Learning Machine formulates signal-agnostic anomaly detection as an extended log-likelihood ratio test between a reference background sample $\mathcal{R}$ and an experimental dataset $\mathcal{D}$~\cite{NPLM2019,NPLM2021}. Replacing neural networks with Nystr\"om kernel logistic regression improved numerical regularity and speed~\cite{KernelNPLM2022,Wilks1938}, and recent studies have applied kernel two-sample tests to pretrained collider embeddings~\cite{NPLMEmbedding2025}. Building on this framework, we compare 29 neural representations with four deterministic physics baselines on identical event draws, separate Poisson yield excesses and track-multiplicity shifts from impact-parameter shape sensitivity, and compare bulk ROC-AUC against extreme low-false-positive-rate tail efficiency.
+\end{dmbox}
+
+\section{ColliderML Dataset}
+\label{sec:dataset}
+
+ColliderML Release-1~\cite{ColliderML} dataset is an open, experiment-agnostic benchmark dataset designed for machine learning studies on realistic collider detector data. Most public datasets use either high/medium levels of abstraction or isolate a single subdetector in controlled conditions. ColliderML is a first-of-its-kind dataset that provides full simulation, full detector events with realistic, non-repeated pileups, miscalibrations, and all intermediate objects in one place. \dmedit{Throughout this study we analyse the zero-pileup (\texttt{pu0}, $\langle\mu\rangle = 0$) configuration so that hard-scatter and displaced-vertex representations can be evaluated without pileup-mitigation confounds.}
+
+The dataset~\dmedit{\cite{ColliderMLDataset}} contains over one million proton-proton collision events across Standard Model (SM) and Beyond Standard Model (BSM) production channels. This dataset provides detector-level observables obtained from a complete simulation, digitisation, and reconstruction chain, making it a realistic benchmark for developing and evaluating transferable event representations.
+
+The collision events \dmedit{at $\sqrt{s} = 14\text{ TeV}$ in the five channels studied here} are generated using \dmedit{\textsc{Pythia}~8.3~\cite{Pythia83}}, followed by detailed detector simulation \dmedit{in the OpenDataDetector geometry ($3.0\text{ T}$ solenoidal field)} using Geant4~\dmedit{\cite{Geant4}} within the DD4hep framework. The detector response is then digitised and charged-particle tracks are reconstructed using the ACTS tracking software~\dmedit{\cite{ACTS}}. This produces realistic detector-level track parameters together with truth associations.
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.6cm and 0.7cm,
+    box/.style={
+    rectangle, draw, thick, rounded corners,
+    minimum height=1cm, text centered,
+    text width=2.5cm, font=\small
+    },
+    arr/.style={-{Stealth[length=2.5mm]}, thick}
+]
+
+\node[box] (pp) {$pp$ collisions};
+\node[box, right=of pp] (pythia) {\dmedit{\textsc{Pythia}~8.3\\(\texttt{pu0})}};
+\node[box, right=of pythia] (geant) {\textsc{Geant4} + \textsc{DD4hep} \\ (Full detector simulation)};
+\node[box, right= of geant] (digi) {Digitisation};
+\node[box, below=1.0cm of digi] (acts) {\textsc{ACTS} \\ Track Reconstruction};
+\node[box, left=of acts] (tracks) {Reconstructed Tracks};
+
+\path[arr] (pp) edge (pythia);
+\path[arr] (pythia) edge (geant);
+\path[arr] (geant) edge (digi);
+\path[arr] (digi) edge (acts);
+\path[arr] (acts) edge (tracks);
+
+\end{tikzpicture}
+\end{center}
+
+In this work, we use a mix of SM processes ($t\bar{t}$, ggF, DiHiggs) and BSM processes (Hidden Valley, Higgs Portal). For the SM processes, the decays are simulated according to their theoretically predicted branching fractions, whereas the BSM processes are simulated with a specific decay channel having $100\%$ branching fraction. Higgs Portal decays into a long-lived pseudoscalar \dmedit{$A_0$}, which then further decays into 2 $b$-jets, so the final state comprises of multiple $b$-jets with displaced vertices. Hidden Valley decays into dark gluons, which then radiates more dark gluons and dark quarks, and \dmedit{hadronises} into dark mesons. The detector final state consists of semi-visible jets.
+
+We use the reconstructed charged-particle tracks provided in ColliderML dataset. Each event consists of a variable number of reconstructed tracks obtained using the ACTS reconstruction chain. Each reconstructed track is described by low-level \dmedit{quantities}, more specifically the transverse and longitudinal impact parameters $(d_0,z_0)$, transverse momentum $(p_T)$, magnitude of momentum $(p)$, azimuthal angle $(\phi)$ and polar angle $(\theta)$. We specify the track direction in Cartesian coordinates, instead of cylindrical coordinates, and hence use the coordinate transformation as: $t_x = \cos(\phi)\sin(\theta), \quad t_y = \sin(\phi)\sin(\theta), \quad t_z = \cos(\theta)$. The angular coordinates are replaced with Cartesian direction cosines to avoid angular discontinuities and provide a continuous representation of track direction. A symlog transformation is applied to $d_0$ and $z_0$, to handle the heavy tail in \dmedit{its} distribution while also preserving the sign.
+
+\begin{dmbox}[New Subsection: Simulation Steering, Zero-Leakage Split, and Track Features]
+\subsection{Simulation Steering and Zero-Leakage Data Partition}
+\label{sec:dataset_split}
+
+The two BSM benchmarks, both steered in \textsc{Pythia}~8.3, have distinct detector signatures. In the Higgs Portal channel (\texttt{HiggsBSM:gg2H2 = on}), a resonant $125\text{ GeV}$ scalar decays exclusively into two neutral long-lived pseudoscalars $A_0$, each decaying to $b\bar{b}$. The $A_0$ has mass $55\text{ GeV}$ and proper decay length $c\tau_0 = 100\text{ mm}$. In the Hidden Valley channel (\texttt{HiddenValley:gg2DvDvbar = on}), pair-produced dark quarks shower inside a confining $SU(3)_v$ sector with confinement scale $\Lambda_v = 40\text{ GeV}$ and dark radiation cutoff $44\text{ GeV}$. The shower yields invisible $10\text{ GeV}$ diagonal dark pions. It also yields prompt off-diagonal $10\text{ GeV}$ pions and $20\text{ GeV}$ vector mesons, which decay into Standard Model quarks.
+
+To prevent data leakage across pretraining, probe fitting, and two-sample testing, we partition events using composite $(\texttt{label}, \texttt{event\_id})$ keys and verify zero overlap between splits:
+\begin{itemize}
+    \item \emph{Standard Model pretraining split ($900,000$ events).} This split contains $300,000$ events each of $t\bar{t}$, single-Higgs gluon-gluon fusion $\text{ggF } H$, and non-resonant di-Higgs production $HH$. Neural encoders, VQ-VAE codebooks, input feature scalers, and deterministic baseline projections are fit exclusively on this split without BSM exposure.
+    \item \emph{Paired evaluation split ($1,050,000$ events).} This split contains $750,000$ held-out SM events, $250,000$ per SM process. It also contains $100,000$ events each of corrected \texttt{higgs\_portal\_v2}, \texttt{hidden\_valley}, and legacy \texttt{higgs\_portal\_v1}. We extract every representation on the identical event ordering (\texttt{eval\_uid}). All representations are evaluated on shared stratified splits of $70\%$ train, $10\%$ validation, and $20\%$ test. For binary BSM transfer probes, we combine a fixed $60,000$-event balanced SM subset with $100,000$ signal events using inverse-frequency class weights.
+\end{itemize}
+
+Within each event, tracks are sorted by descending $p_T$ and padded or truncated to $T$ tracks. We use $T = 128$ for all unified Pre-LN Set Transformers, VQ-VAE models, and from-scratch baselines. Legacy \texttt{supcon}, \texttt{ssl\_legacy}, and \texttt{ae\_transformer\_postln} checkpoints use $T = 256$, matched between training and inference. Impact parameters are transformed via $\text{symlog}(x) = \text{sign}(x)\ln(1 + |x/\text{mm}|)$, giving the seven-feature continuous track vector
+\begin{equation}
+    \mathbf{x}_{ij} = \big(\text{symlog}(d_{0,ij}),\, \text{symlog}(z_{0,ij}),\, p_{ij},\, p_{T,ij},\, t_{x,ij},\, t_{y,ij},\, t_{z,ij}\big) \in \mathbb{R}^7 .
+    \label{eq:track_vec7}
+\end{equation}
+For the contextual VQ-VAE tokeniser ($T_{\text{VQ}} = 128$), each track is parameterised relative to the leading-$p_T$ track azimuth $\phi_{i,0}$ as
+\begin{equation}
+    \mathbf{y}_{ij} = \big(\text{symlog}(d_{0,ij}),\, \text{symlog}(z_{0,ij}),\, \ln p_{T,ij},\, \eta_{ij},\, \cos\Delta\phi_{ij},\, \sin\Delta\phi_{ij}\big) \in \mathbb{R}^6 ,
+    \label{eq:track_vq6}
+\end{equation}
+where $p_T$ is floored at $10^{-3}\text{ GeV}$, $\theta/2$ is clipped to $[10^{-6}, \pi/2 - 10^{-6}]$ before computing $\eta = -\ln\tan(\theta/2)$, and $\Delta\phi_{ij}$ is wrapped to $[-\pi, \pi]$.
+\end{dmbox}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_hp_v1_vs_v2_displaced.pdf}
+    \caption{Track impact-parameter and multiplicity distributions for legacy \texttt{higgs\_portal\_v1} (dotted red), corrected \texttt{higgs\_portal\_v2} with $3.0\text{ T}$ seeding (solid blue), the $2.0\text{ T}$-seeded \texttt{v2\_displaced\_2T} control (dash-dotted orange), \texttt{hidden\_valley} (dashed green), and combined SM events (solid black). Panel (a) shows signed $\text{symlog}(d_0/\text{mm})$, panel (b) shows $|\text{symlog}(d_0/\text{mm})|$, and panel (c) shows reconstructed track multiplicity $N_{\text{tracks}}$.}
+    \label{fig:hp_v1_vs_v2}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Higgs Portal Vertex Audit]
+\subsection{Auditing Displaced Vertices in Higgs Portal Samples}
+\label{sec:hp_bug}
+
+The transverse impact-parameter distribution of the Release 1 \texttt{higgs\_portal} (\texttt{v1}) sample matches the prompt SM cocktail, despite the setting $c\tau_0 = 100\text{ mm}$ in \textsc{Pythia}~8.3, as shown in Fig.~\ref{fig:hp_v1_vs_v2}. By tracing the simulation and reconstruction steering, we identified two differences between legacy \texttt{v1} and our regenerated $100,000$-event \texttt{higgs\_portal\_v2} sample:
+\begin{enumerate}
+    \item \emph{Status-22 decay-vertex stripping in \textsc{ddsim}.} Long-lived $A_0$ bosons carry \textsc{Pythia} status code $22$. The Release 1 \textsc{ddsim} \texttt{HepMC3} reader reset status-22 production vertices to the origin before passing $b\bar{b}$ daughters to \textsc{Geant4}, collapsing displaced decays to $(0,0,0)$. In \texttt{v2} we preserve macroscopic decay vertices above $1\,\mu\text{m}$. The fraction of reconstructed tracks with $|d_0| > 1\text{ mm}$ rises from $3.66\%$ to $7.91\%$. Mean track multiplicity drops from $52.2$ to $38.1$, because standard \textsc{ACTS} inside-out pixel seeding loses efficiency when the $A_0$ decays beyond the inner pixel layers.
+    \item \emph{Seed-finder magnetic field parameter.} \textsc{Geant4} propagation and \textsc{ACTS} Kalman fitting used the true $3.0\text{ T}$ solenoidal field in all samples. The seed-finder parameter \texttt{seeding\_bfield\_tesla} was left at $2.0\text{ T}$ in Release 1 and set to $3.0\text{ T}$ in \texttt{higgs\_portal\_v2}. To separate vertex displacement from this seeding setting, we reconstruct a dedicated $40,000$-event $2\times 2$ factorial, which crosses prompt \texttt{v1} and displaced \texttt{v2} with $2.0\text{ T}$ and $3.0\text{ T}$ seeding. We analyse it in Section~\ref{sec:physics_controls}.
+\end{enumerate}
+\end{dmbox}
+
+\section{Representation Learning Framework}
+\label{sec:rep_learn}
+
+Each event is a set of reconstructed tracks and each reconstructed track is defined by 7 features $(d_0,z_0,p,p_T,t_x,t_y,t_z)$. We want to transform the variable-length collection of reconstructed tracks for each event into a fixed dimensional latent representation, which remains useful across various downstream tasks. The encoder \dmedit{parameterises} a mapping \[
+f_{\theta}: \mathcal{X} \rightarrow \mathbb{R}^{D},
+\]
+where $\mathcal{X}$ represents the vector space of variable-length sets of reconstructed track features for each event and $D$ is the embedding dimension. For an event containing $N$ reconstructed tracks, the encoder produces a latent vector
+\[
+\mathbf{z} = f_{\theta}(\mathbf{X}),
+\]
+where $\mathbf{X} \in \mathbb{R}^{N \times 7}$ represents the track features.
+
+In the original event representation, the dimensionality depends on the number of reconstructed tracks, but the latent vector $\mathbf{z}$ has a fixed dimensionality, irrespective of the track multiplicity in each event. Hence, the encoder is used to compress the information contained in variable number of tracks per event into a compact event-level representation while preserving the characteristics relevant for downstream analyses.
+
+The models are pretrained on SM events only. No BSM events are used during pretraining. This is mainly because we want to learn a generic representation of detector-level collision data without prior exposure to anomalous events. After pretraining, the encoder is frozen and applied to the complete dataset, including both Standard Model and Beyond Standard Model events, to generate event embeddings for downstream evaluation.
+
+We pretrain the models using \dmedit{contrastive, autoencoding, and vector-quantised tokenisation} approaches.
+
+\begin{dmbox}[New Block: Unified Set Transformer Backbone]
+\paragraph{Unified Set Transformer architecture.}
+To compare pretraining objectives on a common backbone, we use a permutation-invariant Set Transformer~\cite{SetTransformer} for all set-level models. A linear layer maps valid tracks into $d_{\text{model}} = 64$, and a learnable $\texttt{[CLS]}$ token is prepended without positional encodings. The unpadded tracks are processed via key-padding masks by $L = 8$ Pre-LN Transformer encoder layers~\cite{PreLNTransformer} with $H = 8$ heads. Each layer has feed-forward width $256$, GELU activations, and dropout $0.025$. An output LayerNorm and linear projection map the final $\texttt{[CLS]}$ state to $\mathbf{z}_i \in \mathbb{R}^D$ for $D \in \{8, 32, 64\}$.
+\end{dmbox}
+
+\subsection{Contrastive Learning}
+
+Contrastive Learning \dmedit{trains an encoder to} maximise the similarity between positive pairs and minimise the similarity between negative pairs \dmedit{in a normalised projection space, grouping physically equivalent or same-process views without reconstructing per-track coordinates}.
+
+\subsubsection{Self-Supervised Contrastive Learning}
+
+Self-supervised contrastive learning does not use labels during the pretraining step. For each event representation, a copy of the event representation is created using physics-invariant augmentations which acts as the positive pair for that representation. All the representations for other events are treated as negative pairs. The encoder is therefore forced to \dmedit{produce} representations that are insensitive to such transformations rather than memorising individual detector measurements, since the augmented views correspond to the same underlying event with small differences in their individual track measurements. We use 2 physics-invariant \dmedit{augmentations in our initial baseline (\texttt{ssl\_legacy})}: Random Rotation and Gaussian Smearing.
+
+\begin{enumerate}
+    \item \textbf{Random Rotation:}
+    $(t_x, t_y)$ are rotated around the beam axis by a random angle $\alpha$ which lies between $0$ and $2\pi$, whereas $t_z$ remains unchanged.
+    The transformation is given by
+    \[
+    \begin{pmatrix} t_x' \\ t_y' \end{pmatrix}
+    =
+    \begin{pmatrix} \cos\alpha & -\sin\alpha \\ \sin\alpha & \cos\alpha \end{pmatrix}
+    \begin{pmatrix} t_x \\ t_y \end{pmatrix}.
+    \]
+    \item \textbf{Gaussian Smearing:}
+    Independent Gaussian noise is added to the features $(d_0, z_0, p, p_T)$ in the \dmedit{standardised} feature space:
+    \[
+        x' = x + \mathcal{N}(0, \sigma_{\text{noise}}).
+    \]
+    The $\sigma$ value for $d_0, z_0$ is $0.1$ and $p$ and $p_T$ is $0.05$.
+\end{enumerate}
+
+The detector is cylindrically symmetrical across the beam axis, so the physics of an event does not depend on the absolute value of azimuthal angle. Rotating every object in the event \dmedit{by} the same angle gives the same physical event back. The relative angles between the objects are important for physics purposes \dmedit{rather than} the absolute angles. And the Gaussian smearing is intended as local perturbation.
+
+Both augmented views are processed by the transformer-based event encoder, producing latent representation $z_i$ and $z_j$. During pretraining, these embeddings are further mapped through a projection head,\[
+g: \mathbb{R}^{D} \rightarrow \mathbb{R}^{D}
+\]
+giving projection vectors $p_i = g(z_i)$ and $p_j = g(z_j)$.
+
+The projection head is used only during the pretraining stage and is discarded after optimisation, with only the encoder retained for downstream applications.
+
+For every anchor representation, the corresponding augmented view of the same event forms the positive pair. All remaining representations of different events within the mini-batch are treated as negative examples. The encoder is therefore forced to maximise the similarity between the positive pairs.
+
+A cosine similarity matrix is then constructed, and the loss is defined as:
+\[
+\mathcal{L}_i = -\log \frac{\exp(\mathrm{sim}(p_i,p_j)/\tau)}{\sum_{k \neq i} \exp(\mathrm{sim}(p_i,p_k)/\tau)},
+\]
+where $p_j$ denotes the positive pair corresponding to $p_i$, and $\tau$ is the temperature parameter \dmedit{($\tau = 0.5$)}. The similarity is calculated as
+\[
+\mathrm{sim}(p_i,p_j) = \frac{p_i \cdot p_j}{\|p_i\|\,\|p_j\|} = \cos\theta_{ij}.
+\]
+
+The assumption is that for the positive pair corresponding to an anchor, the angle (and hence, the loss) will be lower compared to others, since if two representations are built from the same event, the projection vectors corresponding to them should point along the same direction. So, the encoder \dmedit{produces} event representations that are invariant to the applied augmentations while preserving the physics behind the underlying event.
+
+\begin{dmbox}[New Block: Augmentation Geometry and Kinematically Consistent SSL]
+\paragraph{Augmentation invariants and kinematically consistent smearing.}
+The legacy augmentation above has two geometric flaws. First, rigid azimuthal rotation applies no per-track angular smearing, so every polar cosine $t_z = \cos\theta$ and every pairwise relative azimuth $\Delta\phi_{jk}$ is identical across positive views. Second, independent additive noise on standardised $p$ and $p_T$ violates $p_T = p\sin\theta$ and permits negative momenta on soft tracks. To test the effect of this augmentation recipe with sequence cap and backbone held fixed, we train a matched $T=128$ legacy-augmentation control, \texttt{ssl\_legacy\_aug\_t128\_d64}. We compare it with our kinematically consistent \texttt{ssl\_kinematic} family, in which spherical perigee coordinates are perturbed before Cartesian components are recomputed:
+\begin{align}
+    \widetilde{\text{symlog}}(d_0) &= \text{symlog}(d_0) + 0.10\,\sigma_{d_0}\epsilon_{d_0}, \qquad
+    \widetilde{\text{symlog}}(z_0) = \text{symlog}(z_0) + 0.10\,\sigma_{z_0}\epsilon_{z_0}, \nonumber \\
+    \tilde{p} &= p \exp(0.05\,\epsilon_p), \qquad
+    \tilde{\phi} = \phi + \Delta\Phi + 0.02\,\epsilon_\phi, \qquad
+    \tilde{\theta} = \text{clip}(\theta + 0.02\,\epsilon_\theta, 10^{-3}, \pi - 10^{-3}),
+    \label{eq:kinematic_aug}
+\end{align}
+with independent standard normal draws $\epsilon_{\{\cdot\}} \sim \mathcal{N}(0, 1)$, event-level rotation $\Delta\Phi \sim \mathcal{U}(-\pi, \pi)$, $\tilde{p}_T = \tilde{p}|\sin\tilde{\theta}|$, and $(\tilde{t}_x, \tilde{t}_y, \tilde{t}_z) = (\cos\tilde{\phi}\sin\tilde{\theta}, \sin\tilde{\phi}\sin\tilde{\theta}, \cos\tilde{\theta})$. An additional variant (\texttt{ssl\_kinematic\_drop\_d64}) adds $10\%$ random track dropping while retaining the leading-$p_T$ track.
+\end{dmbox}
+
+\subsubsection{Supervised Contrastive Learning}
+
+Supervised contrastive learning~\dmedit{\cite{SupCon}} uses labels during the pretraining step. So, all events belonging to the same process are treated as positive pairs. Conversely, events originating from different processes constitute negative pairs.
+
+The projection vectors are first \dmedit{normalised} to unit length, and then a cosine similarity matrix is constructed for all event pairs in the batch:
+\[
+\mathrm{sim}(p_i,p_j)
+=
+\frac{p_i \cdot p_j}
+{\|p_i\|\,\|p_j\|}
+\]
+
+The similarity values are divided by a temperature parameter $\tau$ \dmedit{($\tau = 0.1$, with positive views formed via two stochastic dropout passes at $T=256$)}:
+\[
+s_{ij}
+=
+\frac{\mathrm{sim}(p_i,p_j)}{\tau}.
+\]
+
+For a given anchor event $i$, let $P(i)$ denote the set of all other events in the batch that share the same label. The supervised contrastive loss is then defined as
+\[
+\mathcal{L}_i
+=
+-\frac{1}{|P(i)|}
+\sum_{p\in P(i)}
+\log
+\frac{\exp(s_{ip})}
+{\sum_{a\neq i}\exp(s_{ia})}.
+\]
+
+The final loss is obtained by averaging over all anchors in the batch:
+\[
+\mathcal{L}
+=
+\frac{1}{N}
+\sum_i \mathcal{L}_i.
+\]
+
+The loss therefore forces events from the same physics process to occupy nearby regions of the latent space while separating events from different processes. So, supervised contrastive learning explicitly uses process labels to create the learned representation according to the underlying physics process.
+
+\subsection{Autoencoding}
+
+Autoencoding-based representation learning \dmedit{constructs} embeddings by reconstructing the important features of the input event from a compressed latent representation. During pretraining, the encoder and a decoder are optimised jointly using a reconstruction objective. After pretraining, the decoder is discarded and only the encoder is retained to generate event embeddings for downstream evaluation.
+
+Instead of reconstructing the complete variable-length collection of reconstructed tracks for each event, we reconstruct a statistical summary of each event. Direct reconstruction of individual tracks requires the decoder to reproduce detailed per-track information that increases the complexity of the problem. We instead define an event-level reconstruction target that captures the global characteristics of each collision.
+
+For each of the seven track features, four summary statistics are computed across all reconstructed tracks belonging to an event: the mean, standard deviation, minimum and maximum. Put together, these statistics \dmedit{give} a fixed 28-dimensional reconstruction target, where each quantity is evaluated independently for the seven track features.
+
+By reconstructing this event-level statistical summary, the encoder is encouraged to preserve the global structure of the event while substantially reducing the complexity of the reconstruction task. Both autoencoder approaches considered in this work use the same reconstruction target, and they differ only in the representation provided as input to the encoder.
+
+\subsubsection{Transformer-Encoder based Autoencoding}
+
+The encoder uses the variable number of reconstructed tracks for each event together with the corresponding attention mask and maps each event to a fixed-dimensional latent representation $z$ \dmedit{(we evaluate both a unified Pre-LN GELU variant at $T=128$, \texttt{ae\_transformer}, and a legacy Post-LN ReLU variant at $T=256$, \texttt{ae\_transformer\_postln})}. The transformer uses self-attention to model correlations among reconstructed tracks before extracting the final event embedding from the CLS token.
+
+The latent representation is then passed on to a MLP decoder that predicts the 28-dimensional event summary. The decoder consists of three fully connected layers, which map the latent representation back to the reconstruction target.
+
+Let $y$ denote the target event summary and $\hat{y}$ be the \dmedit{reconstructed} event summary. The encoder and decoder are trained jointly by minimising the mean squared reconstruction error, \[
+\mathcal{L} = \frac{1}{28} \sum_{k=1}^{28} (\hat{y}_k - y_k)^2 .
+\]
+
+After pretraining, the decoder is discarded and the frozen transformer encoder is used to generate event embeddings for downstream analyses.
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.6cm and 0.55cm,
+    box/.style={
+    rectangle, draw, thick, rounded corners,
+    minimum height=1cm, text centered,
+    text width=2.3cm, font=\small
+    },
+    arr/.style={-{Stealth[length=2.5mm]}, thick}
+]
+
+\node[box] (tracks) {Tracks};
+\node[box, right=of tracks] (encoder) {Transformer\\Encoder};
+\node[box, right=of encoder] (z) {Latent Vector ($z$)};
+\node[box, right=of z] (decoder) {MLP Decoder};
+\node[box, right=of decoder] (summary) {28-D Event\\Summary};
+
+\path[arr] (tracks) edge (encoder);
+\path[arr] (encoder) edge (z);
+\path[arr] (z) edge (decoder);
+\path[arr] (decoder) edge (summary);
+
+\end{tikzpicture}
+\end{center}
+
+\subsubsection{MLP-Encoder based Autoencoding}
+
+Instead of using the variable number of reconstructed tracks for each event, the encoder uses the fixed-dimensional 28-dimensional event summary as its input. The encoder uses a MLP that compresses the event summary into a latent representation $z$ and the decoder uses a second MLP to reconstruct the original summary from this latent vector.
+
+Since every event is represented by a fixed 28-dimensional vector, neither sequence padding nor attention mechanisms are required. The encoder and decoder are trained jointly using the mean squared reconstruction loss.
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.6cm and 0.55cm,
+    box/.style={
+    rectangle, draw, thick, rounded corners,
+    minimum height=1cm, text centered,
+    text width=2.3cm, font=\small
+    },
+    arr/.style={-{Stealth[length=2.5mm]}, thick}
+]
+
+\node[box] (input) {28-D Event\\Summary};
+\node[box, right=of input] (encoder) {MLP Encoder};
+\node[box, right=of encoder] (z) {Latent Vector ($z$)};
+\node[box, right=of z] (decoder) {MLP Decoder};
+\node[box, right=of decoder] (summary) {28-D Event\\Summary};
+
+\path[arr] (input) edge (encoder);
+\path[arr] (encoder) edge (z);
+\path[arr] (z) edge (decoder);
+\path[arr] (decoder) edge (summary);
+
+\end{tikzpicture}
+\end{center}
+
+\begin{dmbox}[New Subsections: VQ-VAE Tokenisation and Reference Baselines]
+\subsection{Contextual VQ-VAE Tokenisation and Tokenised SSL}
+\label{sec:tokenized_ssl}
+
+Our contextual VQ-VAE track tokeniser~\cite{VQVAE} takes up to $T_{\text{VQ}} = 128$ standardised six-feature track vectors from Eq.~\eqref{eq:track_vq6}. The encoder is a four-layer, eight-head Transformer with $d_{\text{model}} = 128$ and feed-forward width $512$, and the decoder is symmetric with four layers. Each valid track state $\mathbf{h}_{ij} \in \mathbb{R}^{128}$ is LayerNorm-normalised, projected to $\mathbf{z}_{e,ij} \in \mathbb{R}^8$, and mapped to its nearest vector $\mathbf{z}_{q,ij} = \mathbf{e}_{k_{ij}^*}$ in an $8192$-entry codebook:
+\begin{equation}
+    k_{ij}^* = \arg\min_{k \in \{1,\dots,8192\}} \|\mathbf{z}_{e,ij} - \mathbf{e}_k\|_2^2 .
+    \label{eq:vqvae}
+\end{equation}
+We train on the $900,000$-event SM split with feature-weighted MSE, with double weight on $\text{symlog}(d_0)$ and $\text{symlog}(z_0)$. The commitment coefficient is $\beta = 0.25$, and we use exponential-moving-average dead-code revival.
+
+For tokenised contrastive pretraining (\texttt{ssl\_tokens\_d\{8,32,64\}}), discrete indices $k_{ij}^*$ are embedded into $d_{\text{model}} = 64$ and passed through the eight-layer Pre-LN Set Transformer for $12$ epochs. Positive pairs combine $10\%$ to $20\%$ random track dropping with pre-quantisation Gaussian perturbations on $(\text{symlog}(d_0), \text{symlog}(z_0), \ln p_T)$. Because \texttt{ssl\_tokens} differs from \texttt{ssl\_kinematic} in input coordinate frame, contextual pre-encoding, and augmentation details, we isolate the effect of vector quantisation separately, by comparing direct pre-quantisation and post-quantisation poolings below.
+
+\subsection{Pooling, Supervised, and Zero-Network Baselines}
+\label{sec:baselines}
+
+As references for the contrastive and autoencoding families, we evaluate four additional groups of baselines:
+\begin{enumerate}
+    \item \emph{Contextual VQ-VAE poolings (\texttt{vqvae\_encoder\_d128}, \texttt{vqvae\_code\_d8}, \texttt{vqvae\_quant\_d8}).} We mean-pool valid track representations taken from the encoder state $\mathbf{h}_{ij} \in \mathbb{R}^{128}$, the pre-quantisation bottleneck $\mathbf{z}_{e,ij} \in \mathbb{R}^8$, or the post-quantisation codebook vectors $\mathbf{z}_{q,ij} \in \mathbb{R}^8$. Comparing the last two allows us to isolate discrete $K=8192$ quantisation without a second Transformer stage.
+    \item \emph{Supervised and random Set Transformers (\texttt{supervised\_e2e\_d64}, \texttt{supervised\_scratch\_d64}, \texttt{random\_init\_d\{8,32,64\}}).} For \texttt{supervised\_e2e\_d64}, we train the eight-layer Set Transformer and a linear head with three-class SM cross-entropy on all $900,000$ pretraining events. For low-label comparisons without unlabelled pretraining, \texttt{supervised\_scratch\_d64} is the identical architecture trained from random weights on each labelled SM budget $N_{\text{labelled}} \in \{100, 10^3, 10^4, 10^5\}$, with track scalers fit only on the $80\%$ training portion of each budget. In \texttt{random\_init}, the untrained random weights are frozen.
+    \item \emph{Two-stage SSL fine-tuning (\texttt{ssl\_kinematic\_ft\_d64}, \texttt{ssl\_tokens\_ft\_d64}).} On the same low-label splits as \texttt{supervised\_scratch\_d64}, we apply linear-probe-then-fine-tuning (LP-FT)~\cite{LPFT2022}. Five epochs of linear-head warmup at learning rate $10^{-3}$ are followed by unfrozen fine-tuning, with learning rate $2\times 10^{-4}$ on the Set Transformer and $10^{-3}$ on the head. For \texttt{ssl\_tokens\_ft\_d64}, the token embedding table and event Transformer are updated on top of frozen VQ-VAE token indices.
+    \item \emph{Zero-network physics baselines (\texttt{raw\_summary\_d28}, \texttt{pca\_summary\_d8}, \texttt{phys\_handcrafted\_d6}, \texttt{mult\_only\_d1}).} Four deterministic representations are fit only on the $900,000$-event SM pretraining split, without neural parameters. \texttt{raw\_summary\_d28} is the 28-feature track summary vector, and \texttt{pca\_summary\_d8} is its top eight SM principal components. \texttt{phys\_handcrafted\_d6} is a six-observable collider and displaced-track vector comprising $\ln(1 + N_{\text{tracks}})$, $\ln(1 + H_T/\text{GeV})$, $\ln(1 + |\vec{p}_T^{\text{miss}}|/\text{GeV})$, $\text{symlog}(\text{RMS}(d_0))$, $\text{symlog}(\max|d_0|)$, and $\ln(1 + N_{\text{tracks}}(|d_0| > 1\text{ mm}))$. \texttt{mult\_only\_d1} is track multiplicity $\ln(1 + N_{\text{tracks}})$ alone.
+\end{enumerate}
+\end{dmbox}
+
+\section{Evaluation}
+\label{sec:validation}
+
+The main objective of this work is to compare different representation learning strategies rather than to \dmedit{optimise} for a specific downstream task. So, all the pretraining approaches are evaluated on a common set of downstream tasks that allows us to assess the quality and transferability of the learned representations.
+
+For each approach, after pretraining, the learned encoder is used to generate fixed-dimensional representations for both SM and BSM processes. The encoder parameters are frozen from the pretraining stage and no further optimisation is done while generating the embeddings. Each event is passed through the pretrained encoder, \dmedit{producing} a latent embedding for that event. Mathematically, \[
+\mathbf{z} = f_{\theta}(\mathbf{X}) \in \mathbb{R}^{D}
+\]
+where $\mathbf{X}$ is the set of reconstructed tracks for a given event and $D$ is the embedding dimension.
+
+These embeddings are subsequently used for supervised event classification and model-independent anomaly detection using the NPLM approach~\dmedit{\cite{NPLM2019,KernelNPLM2022}, which we present in Section~\ref{sec:nplm}}.
+
+\subsection{Supervised Classification}
+
+After generating the embeddings, a linear probe is trained for doing the supervised classification task. Given an event embedding $z \in \mathbb{R}^D$ the linear probe consists of a single fully connected layer, \[
+\hat{y}
+=
+Wz+b
+\]
+where $W$ and $b$ denote the trainable classifier parameters \dmedit{(fit on embeddings standardised on each probe training split, alongside a two-layer MLP probe to measure non-linearly separable information)}. The output logits are converted into class probabilities using the softmax function, and the classifier is trained by \dmedit{minimising} the cross-entropy loss,\[
+\mathcal{L} = -\sum_i \log p_i(y_i)
+\]
+where $y_i$ denotes the true class label.
+
+Since we are training a linear classifier, the classification performance is an indicator of the discriminative information already encoded in the learned representation rather than the capacity of the classifier itself. Strong classification performance indicates that events originating from different physics processes are already well linearly separated in the learned latent space. Conversely, poor classification performance indicates that the representation does not encode enough linear discriminative information and would require a \dmedit{higher-capacity} classifier to achieve higher accuracy.
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_vqvae_fidelity.pdf}
+    \caption{Track-level and event-level reconstruction fidelity of the $K=8192$ contextual VQ-VAE tokeniser across $2,656,735$ held-out SM tracks. Panels (a) to (d) compare input and quantised per-track coordinates, while panels (e) to (h) compare derived event-level observables: scalar sum $H_T$, leading track $p_T$, missing transverse momentum proxy $|\vec{p}_T^{\text{miss}}|$, and event RMS transverse impact parameter.}
+    \label{fig:vqvae_fidelity}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsections: Tokeniser Fidelity, Latent Geometry, Probes, and Fine-Tuning]
+\subsection{VQ-VAE Fidelity and Displaced-Tail Retention}
+\label{sec:vqvae_fidelity}
+
+All $8192$ codebook entries are active across $2,656,735$ valid tracks in held-out SM events. The perplexity is $7253.3$. Out-of-distribution codebook usage is $99.0\%$ on \texttt{higgs\_portal\_v2} and $100.0\%$ on \texttt{hidden\_valley}. As shown in Fig.~\ref{fig:vqvae_fidelity}, per-track coefficients of determination exceed $0.982$ across all six input coordinates. Composite event observables reconstructed from quantised tracks retain $R^2 = 0.994$ on $H_T$ and $R^2 = 0.985$ on RMS $d_0$.
+
+Because the codebook is fit solely on SM tracks, we test whether discretisation truncates displaced BSM trajectories. The test uses the $3,830,998$ reconstructed tracks retained at $T_{\text{VQ}} = 128$ in held-out \texttt{higgs\_portal\_v2}. Reconstructed tracks with $|d_0^{\text{in}}| > 1.0\text{ mm}$ are $7.88\%$ of retained tracks. They are decoded above $1.0\text{ mm}$ with $97.5\%$ recall at a $0.18\%$ false-positive rate. Above $5.0\text{ mm}$, recall is $81.4\%$. Above $10.0\text{ mm}$, where inside-out pixel seeding retains $438$ tracks, threshold recall drops to $3.9\%$. We attribute this to the finite range of SM heavy-flavour impact parameters in the pretraining codebook. Conditional on tracks reconstructed by standard inside-out seeding, discrete $K=8192$ quantisation therefore preserves moderate displaced tails up to several millimetres and saturates beyond $10\text{ mm}$.
+\end{dmbox}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_latent_pca_grid.pdf}
+    \caption{Two-dimensional PCA projections fit to $20,000$ coordinate-standardised held-out SM embeddings across six representative models, annotated with unstandardised SM covariance effective rank ($\text{erank}_{\text{SM}}$). Axis labels report the percentage of standardised SM variance captured by the first two principal components.}
+    \label{fig:latent_pca}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Latent Covariance Spectrum]
+\subsection{Latent Geometry and Effective Rank}
+\label{sec:pca}
+
+We summarise covariance concentration on held-out SM embeddings using the Roy-Vetterli effective rank~\cite{RoyVetterli2007}, $\text{erank}_{\text{SM}} = \exp(-\sum_{k=1}^D p_k \ln p_k)$, where $p_k$ are normalised eigenvalues of the unstandardised SM covariance matrix. Standardised two-dimensional PCA projections are shown in Fig.~\ref{fig:latent_pca}. Supervised SM pretraining concentrates SM variance into low effective rank, giving $\text{erank}_{\text{SM}} = 2.00$ for \texttt{supervised\_e2e\_d64} and $3.50$ for \texttt{supcon\_d64}. In Fig.~\ref{fig:latent_pca}(a), the \texttt{supcon\_d64} embeddings of $t\bar{t}$, $\text{ggF } H$, and di-Higgs $HH$ form three lobes, and \texttt{higgs\_portal\_v2} lies in the region between the $t\bar{t}$ and $HH$ lobes. Contrastive SSL encoders have intermediate effective ranks of $8.30$ for \texttt{ssl\_kinematic\_d64} and $9.20$ for \texttt{ssl\_tokens\_d64}. Full-dimensional reconstruction and summary models have higher effective ranks, from $16.0$ for \texttt{ae\_mlp\_d32} to $19.6$ for \texttt{vqvae\_encoder\_d128} (Table~\ref{tab:probes}).
+\end{dmbox}
+
+\begin{table}[t!]
+\dmfloat{%
+\centering
+\caption{Paired downstream classification and supervised BSM transfer probes across all 33 primary representations on the canonical $1,050,000$-event evaluation dataset, split $70\%$ train, $10\%$ validation, $20\%$ test. Bootstrap standard errors are $\le 0.0013$ on SM-3 accuracy and $\le 0.0009$ on transfer AUCs. Within each neural dimension $D \in \{8, 32, 64, 128\}$ and within the zero-network block, the highest unsupervised or self-supervised value per column is shown in bold.}
+\label{tab:probes}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llcccccccccc}
+\toprule
+\textbf{Family / Model} & $D$ & $\text{erank}_{\text{SM}}$ & \textbf{SM-3 Lin Acc} & \textbf{SM-3 Lin AUC} & \textbf{SM-3 MLP Acc} & \textbf{SM-3 MLP AUC} & \textbf{5-Class Acc} & \textbf{5-Class AUC} & \textbf{Transfer $\text{HP}_{\text{v2}}$} & \textbf{Transfer HV} & \textbf{Transfer $\text{HP}_{\text{v1}}$} \\
+\midrule
+\multicolumn{12}{l}{\textit{Supervised Reference Models (pretrained with SM class labels)}} \\
+\texttt{supcon\_d8} & 8 & 2.58 & 0.8141 & 0.9393 & 0.8147 & 0.9400 & 0.6446 & 0.9174 & 0.8827 & 0.9309 & 0.8114 \\
+\texttt{supcon\_d32} & 32 & 3.21 & 0.8167 & 0.9405 & 0.8170 & 0.9409 & 0.7434 & 0.9450 & 0.9344 & 0.9899 & 0.8776 \\
+\texttt{supcon\_d64} & 64 & 3.50 & 0.8172 & 0.9409 & 0.8174 & 0.9416 & 0.7544 & 0.9472 & 0.9414 & 0.9895 & 0.8768 \\
+\texttt{supervised\_e2e\_d64}$^\dagger$ & 64 & 2.00 & 0.8153 & 0.9402 & 0.8147 & 0.9402 & 0.7495 & 0.9474 & 0.9348 & 0.9908 & 0.8753 \\
+\midrule
+\multicolumn{12}{l}{\textit{Self-Supervised Contrastive (Track-Set Transformer Backbone, Unlabelled SM Pretraining)}} \\
+\texttt{ssl\_kinematic\_d8} & 8 & 5.82 & 0.6031 & 0.7823 & 0.6373 & 0.8085 & 0.4541 & 0.8213 & 0.8670 & 0.9068 & 0.7632 \\
+\texttt{ssl\_kinematic\_d32} & 32 & 8.57 & 0.6780 & 0.8415 & 0.6974 & 0.8554 & 0.5543 & 0.8660 & 0.9018 & 0.9300 & 0.7822 \\
+\texttt{ssl\_kinematic\_d64} & 64 & 8.30 & 0.6800 & 0.8421 & 0.7000 & 0.8569 & 0.5535 & 0.8669 & 0.8967 & 0.9307 & 0.7746 \\
+\texttt{ssl\_kinematic\_drop\_d64} & 64 & 14.36 & 0.6760 & 0.8375 & 0.7230 & 0.8724 & 0.5556 & 0.8614 & 0.8946 & 0.9253 & 0.7985 \\
+\texttt{ssl\_tokens\_d8} & 8 & 3.37 & \textbf{0.6439} & \textbf{0.8158} & \textbf{0.6622} & \textbf{0.8299} & \textbf{0.5250} & \textbf{0.8452} & 0.8805 & \textbf{0.9227} & \textbf{0.7876} \\
+\texttt{ssl\_tokens\_d32} & 32 & 8.44 & \textbf{0.6797} & \textbf{0.8435} & 0.6962 & 0.8582 & 0.5711 & 0.8688 & 0.9001 & 0.9322 & 0.8026 \\
+\texttt{ssl\_tokens\_d64}$^\ddagger$ & 64 & 9.20 & 0.6893 & \textbf{0.8496} & 0.7035 & 0.8632 & 0.5854 & 0.8749 & 0.9023 & 0.9413 & 0.8066 \\
+\texttt{ssl\_legacy\_d8} (legacy aug) & 8 & 5.70 & 0.5525 & 0.7349 & 0.5869 & 0.7682 & 0.3834 & 0.7842 & 0.8267 & 0.8907 & 0.7556 \\
+\texttt{ssl\_legacy\_d32} (legacy aug) & 32 & 8.44 & 0.6222 & 0.7981 & 0.6486 & 0.8198 & 0.5008 & 0.8341 & 0.8724 & 0.9218 & 0.7607 \\
+\texttt{ssl\_legacy\_d64} (legacy aug) & 64 & 8.59 & 0.6118 & 0.7901 & 0.6583 & 0.8268 & 0.4802 & 0.8238 & 0.8527 & 0.9161 & 0.7397 \\
+\midrule
+\multicolumn{12}{l}{\textit{Unsupervised 28-D Physics Summary Bottlenecks (Unlabelled SM Pretraining)}} \\
+\texttt{ae\_transformer\_d8} (Pre-LN) & 8 & 3.37 & 0.4706 & 0.6526 & 0.6132 & 0.7892 & 0.3599 & 0.7210 & 0.7704 & 0.8521 & 0.6604 \\
+\texttt{ae\_transformer\_d32} (Pre-LN) & 32 & 16.65 & 0.6618 & 0.8280 & 0.7236 & 0.8743 & 0.5909 & 0.8714 & 0.9087 & 0.9603 & 0.8188 \\
+\texttt{ae\_transformer\_d64} (Pre-LN) & 64 & 16.95 & 0.6832 & 0.8431 & 0.7284 & 0.8786 & 0.6173 & 0.8838 & 0.9235 & 0.9611 & \textbf{0.8225} \\
+\texttt{ae\_transformer\_postln\_d8} & 8 & 1.87 & 0.4307 & 0.6191 & 0.5737 & 0.7572 & 0.2955 & 0.6614 & 0.7200 & 0.7365 & 0.5820 \\
+\texttt{ae\_transformer\_postln\_d32} & 32 & 18.52 & 0.6773 & 0.8389 & \textbf{0.7258} & \textbf{0.8763} & \textbf{0.6130} & \textbf{0.8831} & \textbf{0.9282} & \textbf{0.9618} & \textbf{0.8193} \\
+\texttt{ae\_transformer\_postln\_d64} & 64 & 19.55 & \textbf{0.6916} & 0.8492 & \textbf{0.7324} & \textbf{0.8808} & \textbf{0.6292} & \textbf{0.8913} & \textbf{0.9372} & \textbf{0.9622} & 0.8213 \\
+\texttt{ae\_mlp\_d8} & 8 & 7.16 & 0.5585 & 0.7261 & 0.6014 & 0.7751 & 0.4437 & 0.7837 & 0.8014 & 0.9175 & 0.7182 \\
+\texttt{ae\_mlp\_d32} & 32 & 16.00 & 0.6557 & 0.8225 & 0.7146 & 0.8684 & 0.5887 & 0.8711 & 0.9275 & 0.9586 & 0.8171 \\
+\texttt{ae\_mlp\_d64} & 64 & 17.18 & 0.6594 & 0.8261 & 0.7159 & 0.8696 & 0.5980 & 0.8761 & 0.9301 & 0.9603 & 0.8200 \\
+\midrule
+\multicolumn{12}{l}{\textit{Frozen Contextual VQ-VAE Poolings and Untrained Random Baselines}} \\
+\texttt{vqvae\_code\_d8} (pure pre-VQ $\mathbf{z}_e$) & 8 & 5.35 & 0.5596 & 0.7449 & 0.6021 & 0.7837 & 0.4341 & 0.7973 & 0.9097 & 0.8260 & 0.7378 \\
+\texttt{vqvae\_quant\_d8} (pure post-VQ $\mathbf{z}_q$) & 8 & 5.32 & 0.5592 & 0.7446 & 0.5998 & 0.7816 & 0.4355 & 0.7981 & \textbf{0.9118} & 0.8273 & 0.7385 \\
+\texttt{vqvae\_encoder\_d128} & 128 & 8.46 & \textbf{0.7007} & \textbf{0.8586} & \textbf{0.7437} & \textbf{0.8915} & \textbf{0.6642} & \textbf{0.9069} & \textbf{0.9549} & \textbf{0.9774} & \textbf{0.8523} \\
+\texttt{random\_init\_d8} & 8 & 1.90 & 0.5083 & 0.6893 & 0.5951 & 0.7727 & 0.3565 & 0.7496 & 0.7788 & 0.8765 & 0.7141 \\
+\texttt{random\_init\_d32} & 32 & 2.97 & 0.5872 & 0.7689 & 0.6665 & 0.8293 & 0.4488 & 0.8097 & 0.8393 & 0.9047 & 0.7682 \\
+\texttt{random\_init\_d64} & 64 & 2.75 & 0.6236 & 0.7963 & 0.6857 & 0.8446 & 0.5206 & 0.8427 & 0.8923 & 0.9298 & 0.7913 \\
+\midrule
+\multicolumn{12}{l}{\textit{Zero-Network Physics Baselines (Deterministic Summaries and Classical Observables)}} \\
+\texttt{raw\_summary\_d28} (28-D summary) & 28 & 16.59 & 0.6413 & 0.8132 & \textbf{0.7117} & \textbf{0.8662} & 0.5643 & 0.8614 & 0.9125 & \textbf{0.9545} & \textbf{0.8197} \\
+\texttt{pca\_summary\_d8} (top-8 SM PCA) & 8 & 7.90 & 0.5603 & 0.7426 & 0.6473 & 0.8191 & 0.4411 & 0.7978 & 0.8799 & 0.9261 & 0.7903 \\
+\texttt{phys\_handcrafted\_d6} (6-D obs.) & 6 & 3.46 & \textbf{0.6747} & \textbf{0.8383} & 0.7003 & 0.8570 & \textbf{0.5904} & \textbf{0.8784} & \textbf{0.9296} & 0.9446 & 0.8102 \\
+\texttt{mult\_only\_d1} ($N_{\text{tracks}}$ only) & 1 & 1.00 & 0.4846 & 0.6749 & 0.4927 & 0.6799 & 0.2882 & 0.7032 & 0.7508 & 0.7418 & 0.5908 \\
+\bottomrule
+\multicolumn{12}{l}{\footnotesize $^\dagger$Direct end-to-end head on \texttt{supervised\_e2e\_d64} yields $0.8131$ SM-3 accuracy and $0.9398$ ROC-AUC.} \\
+\multicolumn{12}{l}{\footnotesize $^\ddagger$Unified 12-epoch Pre-LN \texttt{TokenSetTransformerEncoder}; an earlier 20-epoch Post-LN checkpoint (\texttt{ssl\_tokens\_legacy\_d64}) yielded $0.6834$ SM-3 linear accuracy.}
+\end{tabular}%
+}
+}
+\end{table}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_probe_scaling.pdf}
+    \caption{Downstream linear probe ROC-AUC across bottleneck dimensions $D \in \{8, 32, 64\}$ compared with deterministic baselines (\texttt{raw\_summary\_d28} dash-dotted black, \texttt{phys\_handcrafted\_d6} dotted magenta): (a) three-class SM macro ROC-AUC, (b) binary transfer ROC-AUC on \texttt{higgs\_portal\_v2}, and (c) binary transfer ROC-AUC on \texttt{hidden\_valley}.}
+    \label{fig:probe_scaling}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Paired Downstream Probe Results]
+\subsection{Downstream Classification and Transfer Probes}
+\label{sec:probes}
+
+Paired classification and supervised BSM transfer probe metrics across all 33 primary representations are reported in Table~\ref{tab:probes} and Fig.~\ref{fig:probe_scaling}. For the binary transfer columns, we fit a supervised linear classifier using BSM labels on frozen SM-pretrained embeddings to quantify linear separability. Signal-agnostic detection without BSM labels is evaluated in Section~\ref{sec:nplm}. We observe four patterns:
+\begin{enumerate}
+    \item \emph{Augmentation control in continuous SSL.} Legacy \texttt{ssl\_legacy\_d64}, trained at $T=256$, reaches $0.6118$ three-class SM linear accuracy. The untrained \texttt{random\_init\_d64} baseline reaches $0.6236$. In a matched single-variable control (Table~\ref{tab:controls_phase3}), we hold the $T=128$ Pre-LN Set Transformer, 20-epoch schedule, and batching fixed. The legacy augmentation recipe, \texttt{ssl\_legacy\_aug\_t128\_d64}, then yields $0.6228$ SM-3 linear accuracy. Kinematically consistent \texttt{ssl\_kinematic\_d64} yields $0.6790 \pm 0.0019$ across three pretraining seeds, so we attribute the gain to the kinematically consistent augmentation. Adding $10\%$ random track dropping in \texttt{ssl\_kinematic\_drop\_d64} raises two-layer MLP SM-3 accuracy to $0.7230$.
+    \item \emph{Scaling of tokenised SSL and pre- versus post-quantisation pooling.} The SM-3 linear accuracy of unified \texttt{ssl\_tokens} rises monotonically from $0.6439$ at $D=8$ to $0.6893$ at $D=64$. The three-seed mean is $0.6858 \pm 0.0079$ (Table~\ref{tab:controls_phase3}). To isolate vector quantisation, we compare the pre-quantisation pooling \texttt{vqvae\_code\_d8} with the post-quantisation pooling \texttt{vqvae\_quant\_d8}. The two agree within $0.0023$ across all classification and transfer metrics in Table~\ref{tab:probes}.
+    \item \emph{Comparison against deterministic physics baselines.} Without neural parameters, \texttt{raw\_summary\_d28} achieves $0.6413$ SM-3 linear accuracy and $0.7117$ MLP accuracy. \texttt{phys\_handcrafted\_d6} achieves $0.6747$ linear accuracy and $0.9296$ transfer AUC on \texttt{higgs\_portal\_v2}. Full-set Transformers improve linear SM-3 accuracy over \texttt{raw\_summary\_d28} by four to six percentage points. Among unsupervised models, \texttt{vqvae\_encoder\_d128} is highest, at $0.7007$ linear accuracy and $0.9549$ \texttt{higgs\_portal\_v2} transfer AUC.
+    \item \emph{Sensitivity to restored Higgs Portal displacement.} Across all 33 representations in Table~\ref{tab:probes}, restoring status-22 displaced vertices increases binary transfer ROC-AUC from \texttt{higgs\_portal\_v1} to \texttt{higgs\_portal\_v2}. For \texttt{vqvae\_quant\_d8} it rises from $0.7385$ to $0.9118$.
+\end{enumerate}
+\end{dmbox}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_label_efficiency.pdf}
+    \caption{Three-class SM test macro ROC-AUC across labelled SM budgets $N_{\text{labelled}} \in \{100, 10^3, 10^4, 10^5\}$ for (a) frozen linear probes and two-stage LP-FT fine-tuning, and (b) frozen two-layer MLP probes, compared with end-to-end training from random initialisation (\texttt{supervised\_scratch\_d64}) and \texttt{raw\_summary\_d28}. Each budget is split $80\%$ train and $20\%$ validation. Points show the mean $\pm 1\sigma$ across five paired draws.}
+    \label{fig:label_eff}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Low-Label Sample Efficiency and Fine-Tuning]
+\subsection{Low-Label Efficiency and Fine-Tuning}
+\label{sec:label_efficiency}
+
+In Fig.~\ref{fig:label_eff} and Table~\ref{tab:controls_phase3} we compare frozen $D=64$ probes and two-stage LP-FT fine-tuning against training the identical eight-layer Set Transformer from random weights (\texttt{supervised\_scratch\_d64}) across five paired stratified draws at $N_{\text{labelled}} \in \{100, 10^3, 10^4, 10^5\}$. At $N_{\text{labelled}} = 100$, \texttt{supervised\_scratch\_d64} averages $52.3\% \pm 7.2\%$ accuracy. Frozen linear probing on \texttt{ssl\_tokens\_d64} reaches $58.5\% \pm 2.9\%$, and two-stage fine-tuning of \texttt{ssl\_kinematic\_d64} (\texttt{ssl\_kinematic\_ft\_d64}) reaches $61.2\% \pm 3.4\%$.
+
+At $N_{\text{labelled}} = 1,000$, \texttt{supervised\_scratch\_d64} reaches $65.2\% \pm 2.8\%$. Frozen linear probes on \texttt{ssl\_kinematic\_d64} and \texttt{ssl\_tokens\_d64} match or exceed this, with six- to tenfold smaller seed-to-seed spread. Two-stage fine-tuning raises accuracy to $67.8\% \pm 0.5\%$ for \texttt{ssl\_kinematic\_ft\_d64} and $67.4\% \pm 0.6\%$ for \texttt{ssl\_tokens\_ft\_d64}. At $10^4$ and $10^5$ labelled events, frozen linear probes plateau below $69\%$. Unfrozen fine-tuning of \texttt{ssl\_kinematic\_d64} rises to $71.3\%$ and $74.5\%$, close to from-scratch training (Table~\ref{tab:controls_phase3}). Unlabelled pretraining thus provides its largest accuracy and stability gains at $N_{\text{labelled}} \le 10^3$, while unfreezing the pretrained encoder removes the frozen-probe ceiling at larger label budgets.
+\end{dmbox}
+
+\section{Model-Independent Anomaly Detection using NPLM}
+\label{sec:nplm}
+
+NPLM~\dmedit{\cite{NPLM2019,NPLM2021,KernelNPLM2022}} \dmedit{tests} whether the distribution of observed data differs from the reference background, without specifying a particular signal model. It compares a reference background sample with the test data distribution, where the reference sample consists of only SM events and test sample consists of both SM and BSM events.
+
+It is based on a kernel model, where the kernel maps the original embedding into a feature space where we can construct a function $f(x)$, that approximates the \dmedit{log-intensity} ratio \[
+f(x) \approx \log\left(\frac{\dmedit{N_D\,}p_D(x)}{\dmedit{N_B\,}p_B(x)}\right)
+\]where $p_B$ is the probability distribution function of background, and probability distribution function of test data is $p_D$ \dmedit{(reducing to the log-density ratio $\log[p_D(x)/p_B(x)]$ under fixed-size shape testing $N_D = N_B$)}. So, if $f(x)>0$, the test data have relatively more density there than the reference, and if $f(x)<0$, they have relatively less.
+
+A fixed number of events/embeddings (say, $M$) are chosen at random to be the kernel \dmedit{centres}. For an event \(x\) and kernel centre \(c_i\), the similarity between them is calculated using a Gaussian kernel:
+\[
+K(x,c_i)
+=
+\exp\left(
+-\frac{\|x-c_i\|^2}{2\sigma^2}
+\right)
+\]
+where \(\sigma\) is the kernel width and \(\|\cdot\|\) denotes the Euclidean norm. $\sigma$ denotes how ``wide'' each Gaussian is, and it is chosen from the distribution of pairwise \dmedit{distances}. If \(x\) is close to \(c_i\), then $K(x,c_i)\approx1$, and if \(x\) is far away from \(c_i\), then $K(x,c_i)\approx0$.
+
+For every event \(x\), its distance to every kernel centre and hence Gaussian similarity is calculated\[
+\phi(x)
+=
+\left[
+K(x,c_1),
+K(x,c_2),
+\ldots,
+K(x,c_M)
+\right].
+\]
+
+Therefore, the original \(D\)-dimensional embedding is converted into an \(M\)-dimensional kernel feature vector, which then acts as the input to NPLM\[
+x\in\mathbb{R}^{D}
+\quad\longrightarrow\quad
+\phi(x)\in\mathbb{R}^{M}.
+\]
+
+The NPLM function is a linear combination of the kernel features $f_w(x)=\phi(x)^T w$, where $w=(w_1,w_2,\ldots,w_M)$ are the trainable weights. The \dmedit{optimisation} function is the weighted cross-entropy loss \dmedit{with Tikhonov regularisation $\lambda\, w^T K_{MM} w$} \[
+\ell(y,f)
+=
+a_0(1-y)\log(1+e^f)
++
+a_1y\log(1+e^{-f}).
+\]Here, $y=0$ corresponds to an event from the reference sample, while $y=1$ corresponds to an event from the data sample \dmedit{(with $a_0 = 1$ and $a_1 = N_R / N_B$ matching Eq.~(12) of Ref.~\cite{KernelNPLM2022})}.
+
+After training the kernel model, we evaluate $f_w(x)=\phi(x)^T w$ for both the reference and data samples. The density-ratio estimate is related to $e^{f_w(x)}$. The expected number of events under the learned model is therefore estimated from the reference sample as\[
+N_w(1)
+\approx
+\frac{N_B}{N_R}
+\sum_{x\in R}
+e^{f_w(x)}.
+\]
+
+Here \(N_R\) is the number of events in the reference sample and \(N_B\) is the expected number of events under the reference hypothesis. This allows the learned density ratio to be converted into a likelihood-ratio test statistic.
+
+The test statistic is calculated from the learned \(f_w\). The expression for the test statistic is \[
+t_w
+=
+2
+\left[
+\frac{N_B}{N_R}
+\sum_{x\in R}
+\left(1-e^{f_w(x)}\right)
++
+\sum_{y\in D}
+f_w(y)
+\right] .
+\]
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_nplm_calibration_and_rate.pdf}
+    \caption{Conditional null calibration and rate-versus-shape separation in Kernel NPLM. Panel (a) compares $5,000$ calibration nulls (shaded blue) against $5,000$ independent validation nulls (black outline) for \texttt{ae\_transformer\_d32}. Empirical thresholds at $\alpha = 10^{-2}$ and $10^{-3}$ are marked, and $200$ signal toys are shown at $0.5\%$ and $1.0\%$ \texttt{higgs\_portal\_v2} injection. Panel (b) compares fixed-size shape-only mixtures ($N_D = N_B = 100,000$, solid) against additive signal injection ($N_D = N_B + N_S$, dashed) and the zero-dimensional Poisson rate term $t_{\text{rate}}$ (dotted red).}
+    \label{fig:nplm_cal}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Direct Newton-Raphson Solver and Conditional Calibration]
+\subsection{Newton-Raphson Solver and Empirical Calibration}
+\label{sec:nplm_calibration}
+
+In our primary benchmark, $\mathcal{R}$ contains $N_R = 500,000$ held-out SM events, and the remaining $250,000$ held-out SM events form the background sampling pool. We set $N_B = 100,000$ and $\lambda = 10^{-6}$, and draw $M = 316$ Nystr\"om centres from $\mathcal{R}$. Embeddings are standardised per coordinate on $\mathcal{R}$ only. The Gaussian width $\sigma$ is set to the $q = 0.90$ pairwise-distance quantile on $2,500$ reference events. Because the kernel matrix $K_{MM}$ has condition number near $10^8$, quasi-Newton L-BFGS requires roughly $21.5\text{ s}$ per toy. For $M = 316$ we instead assemble the exact gradient and $M\times M$ Hessian in \texttt{float64} on GPU and solve each damped Newton-Raphson step directly with backtracking line search. The solver converges in four to five iterations, or $\sim 30\text{ ms}$ per toy.
+
+Under additive injection ($N_D = N_B + N_S$), even a constant model $f_0 = \log(N_D / N_B)$ accrues a representation-independent rate contribution
+\begin{equation}
+    t_{\text{rate}}(N_B, N_S) = 2\left[(N_B + N_S)\log\!\left(1 + \frac{N_S}{N_B}\right) - N_S\right] \approx \frac{N_S^2}{N_B} ,
+    \label{eq:t_rate}
+\end{equation}
+which reaches $245.9$ at $5\%$ injection in Fig.~\ref{fig:nplm_cal}(b). All primary comparisons therefore use fixed-size shape-only mixtures with $N_D = N_B = 100,000$, in which $N_S$ background draws are replaced with signal draws so that $t_{\text{rate}} \equiv 0$.
+
+We evaluate two shared-seed empirical tiers:
+\begin{enumerate}
+    \item \emph{Paired 33-model sweep ($250$ nulls, $100$ signal toys; Table~\ref{tab:nplm}).} We report the standardised median shift $\text{SNR} = (t_{\text{med}} - \mu_{\text{null}}) / \sigma_{\text{null}}$, empirical detection power at $\alpha = 10^{-2}$, and fitted scaled-$\chi^2$ $Z_{\text{asym}}$. We use $Z_{\text{asym}}$ only as a monotone summary within each null fit, rather than as a Gaussian discovery claim.
+    \item \emph{Conditional $10,000$-null benchmark ($5,000$ calibration plus $5,000$ validation nulls, $200$ signal toys; Table~\ref{tab:nplm_highstats}).} For 16 representative models, conditional on $\mathcal{R}$, we set order-statistic thresholds $t_{1-\alpha}$~\cite{PhipsonSmyth2010} on $5,000$ calibration toys drawn from the $250,000$-event held-out SM pool. We check them on $5,000$ independent validation draws. Validation false-positive rates are in $[0.0078, 0.0132]$ at $\alpha = 10^{-2}$ and in $[0.0000, 0.0020]$ at $\alpha = 10^{-3}$, with Clopper-Pearson intervals~\cite{ClopperPearson1934}. Sampling $100,000$ events without replacement from a $250,000$-event pool gives a calibration that is conditional on that finite held-out pool. We therefore also run two checks. The first is a smaller-$N_B$ check with $N_R = 350,000$, $N_{\text{pool}} = 400,000$, and $N_B = 25,000$, a $6.25\%$ pool fraction. The second is a five-seed reference variability check, with $1,000$ nulls per seed across independent draws of $\mathcal{R}$ and kernel centres.
+\end{enumerate}
+\end{dmbox}
+
+\begin{table}[t!]
+\dmfloat{%
+\centering
+\caption{Paired shape-only Kernel NPLM sweep across all 33 primary representations, with $N_R=500\text{k}$, $N_D=100\text{k}$, $M=316$, $q=0.90$, $250$ paired null toys, and $100$ paired signal toys per point. Columns report null mean and standard deviation, standardised median shift $\text{SNR} = (t_{\text{med}}-\mu_{\text{null}})/\sigma_{\text{null}}$, empirical power at $\alpha=10^{-2}$, and scaled-$\chi^2$ $Z_{\text{asym}}$, the last two at $1.0\%$ injection. Top neural and zero-network values per column are bolded.}
+\label{tab:nplm}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llcc|ccccc|ccccc|c}
+\toprule
+& & \multicolumn{2}{c|}{\textbf{Null ($250$)}} & \multicolumn{5}{c|}{\textbf{Higgs Portal \texttt{v2} (Displaced LLP)}} & \multicolumn{5}{c|}{\textbf{Hidden Valley (Dark Shower)}} & \textbf{Legacy $\text{HP}_{\text{v1}}$} \\
+\textbf{Model} & $D$ & $\mu_{\text{null}}$ & $\sigma_{\text{null}}$ & \textbf{SNR 0.5\%} & \textbf{SNR 1.0\%} & $\textbf{Pow}_{10^{-2}}$ & $Z_{\text{asym}}$ & \textbf{SNR 2.5\%} & \textbf{SNR 0.5\%} & \textbf{SNR 1.0\%} & $\textbf{Pow}_{10^{-2}}$ & $Z_{\text{asym}}$ & \textbf{SNR 2.5\%} & \textbf{SNR 1.0\%} \\
+\midrule
+\multicolumn{15}{l}{\textit{Supervised Reference Models (pretrained with SM class labels)}} \\
+\texttt{supcon\_d8} & 8 & 90.1 & 11.6 & 0.65 & 3.44 & 0.76 & 3.06 & 21.7 & 3.01 & 13.00 & \textbf{1.00} & 9.13 & 74.9 & 1.96 \\
+\texttt{supcon\_d32} & 32 & 242.8 & 19.2 & 0.90 & 3.99 & 0.86 & 3.67 & 23.9 & 8.33 & \textbf{33.68} & \textbf{1.00} & \textbf{20.96} & \textbf{169.3} & \textbf{3.28} \\
+\texttt{supcon\_d64} & 64 & 287.7 & 22.3 & 0.72 & 3.36 & 0.57 & 3.15 & 22.6 & \textbf{9.09} & 32.40 & \textbf{1.00} & 20.61 & 157.3 & 2.36 \\
+\texttt{supervised\_e2e\_d64} & 64 & 353.0 & 24.1 & 0.39 & 2.27 & 0.56 & 2.18 & 17.9 & 3.50 & 14.68 & \textbf{1.00} & 11.49 & 83.2 & 1.78 \\
+\midrule
+\multicolumn{15}{l}{\textit{Self-Supervised Contrastive (Track-Set Transformer Backbone)}} \\
+\texttt{ssl\_kinematic\_d8} & 8 & 115.7 & 12.6 & 0.75 & 4.34 & 0.94 & 3.79 & 27.3 & 1.07 & 4.64 & 0.96 & 4.02 & 25.9 & 0.28 \\
+\texttt{ssl\_kinematic\_d32} & 32 & 226.3 & 18.1 & 1.11 & 4.36 & 0.90 & 3.94 & 27.4 & 0.99 & 4.30 & 0.93 & 3.90 & 25.4 & 0.55 \\
+\texttt{ssl\_kinematic\_d64} & 64 & 224.6 & 18.6 & 0.69 & 3.63 & 0.70 & 3.34 & 23.7 & 0.98 & 3.93 & 0.83 & 3.59 & 24.1 & 0.30 \\
+\texttt{ssl\_kinematic\_drop\_d64} & 64 & 339.4 & 23.4 & 0.20 & 2.62 & 0.30 & 2.52 & 17.0 & 0.79 & 2.78 & 0.38 & 2.66 & 17.4 & 0.52 \\
+\texttt{ssl\_tokens\_d8} & 8 & 55.3 & 9.6 & 1.42 & 5.91 & 0.98 & 4.66 & 36.3 & 1.61 & 6.48 & \textbf{1.00} & 5.01 & 38.4 & 1.02 \\
+\texttt{ssl\_tokens\_d32} & 32 & 226.1 & 18.2 & 1.22 & 4.47 & 0.87 & 4.04 & 27.9 & 1.18 & 4.84 & 0.95 & 4.33 & 28.2 & 0.60 \\
+\texttt{ssl\_tokens\_d64}$^\ddagger$ & 64 & 263.6 & 18.4 & 1.30 & 4.88 & 0.97 & 4.44 & 28.9 & 1.45 & 5.13 & \textbf{1.00} & 4.65 & 30.3 & 0.83 \\
+\texttt{ssl\_legacy\_d8} & 8 & 108.9 & 12.2 & 0.25 & 2.19 & 0.26 & 2.06 & 13.9 & 1.25 & 4.11 & 0.86 & 3.63 & 21.4 & 0.51 \\
+\texttt{ssl\_legacy\_d32} & 32 & 209.7 & 17.0 & 1.08 & 3.78 & 0.80 & 3.50 & 21.7 & 0.96 & 3.91 & 0.83 & 3.61 & 22.5 & 0.68 \\
+\texttt{ssl\_legacy\_d64} & 64 & 230.2 & 20.5 & 0.72 & 2.96 & 0.68 & 2.75 & 15.0 & 0.83 & 2.84 & 0.60 & 2.65 & 16.8 & 0.40 \\
+\midrule
+\multicolumn{15}{l}{\textit{Unsupervised 28-D Physics Summary Bottlenecks}} \\
+\texttt{ae\_transformer\_d8} & 8 & 162.5 & 16.0 & 2.16 & 8.09 & \textbf{1.00} & 6.64 & 45.4 & 0.90 & 4.03 & 0.90 & 3.64 & 21.5 & 0.14 \\
+\texttt{ae\_transformer\_d32} & 32 & 357.9 & 24.8 & 2.11 & 7.65 & \textbf{1.00} & 6.63 & 43.8 & 1.50 & 6.24 & \textbf{1.00} & 5.55 & 35.3 & 0.11 \\
+\texttt{ae\_transformer\_d64} & 64 & 354.7 & 24.4 & 1.74 & 7.29 & \textbf{1.00} & 6.36 & 43.1 & 1.76 & 6.77 & \textbf{1.00} & 5.96 & 36.7 & 0.07 \\
+\texttt{ae\_transformer\_postln\_d8} & 8 & 111.2 & 13.2 & 2.22 & 8.58 & \textbf{1.00} & 6.71 & 45.8 & 0.76 & 2.89 & 0.52 & 2.64 & 14.7 & 0.02 \\
+\texttt{ae\_transformer\_postln\_d32} & 32 & 341.5 & 25.0 & 1.95 & 7.59 & \textbf{1.00} & 6.55 & 43.7 & 1.59 & 6.62 & \textbf{1.00} & 5.81 & 37.1 & 0.01 \\
+\texttt{ae\_transformer\_postln\_d64} & 64 & 350.5 & 25.3 & 2.13 & 8.21 & \textbf{1.00} & 7.03 & 46.8 & 1.48 & 6.48 & \textbf{1.00} & 5.72 & 36.2 & 0.12 \\
+\texttt{ae\_mlp\_d8} & 8 & 196.8 & 17.4 & 2.62 & 8.72 & \textbf{1.00} & 7.22 & 44.3 & 1.00 & 3.55 & 0.82 & 3.29 & 20.3 & 0.03 \\
+\texttt{ae\_mlp\_d32} & 32 & 361.0 & 26.8 & 2.01 & 7.44 & \textbf{1.00} & 6.41 & 40.2 & 0.97 & 4.32 & 0.95 & 3.95 & 24.1 & 0.10 \\
+\texttt{ae\_mlp\_d64} & 64 & 357.9 & 24.7 & 1.98 & 7.45 & \textbf{1.00} & 6.48 & 41.0 & 0.91 & 4.41 & 0.96 & 4.05 & 26.1 & 0.09 \\
+\midrule
+\multicolumn{15}{l}{\textit{Frozen Contextual VQ-VAE Poolings and Untrained Random Baselines}} \\
+\texttt{vqvae\_code\_d8} (pure $\mathbf{z}_e$) & 8 & 177.6 & 15.1 & 4.71 & 18.28 & \textbf{1.00} & 13.02 & 89.5 & 0.01 & 1.90 & 0.32 & 1.83 & 11.2 & 0.36 \\
+\texttt{vqvae\_quant\_d8} (pure $\mathbf{z}_q$) & 8 & 179.8 & 15.1 & \textbf{4.92} & \textbf{18.41} & \textbf{1.00} & \textbf{13.20} & \textbf{90.6} & 0.09 & 1.75 & 0.22 & 1.70 & 11.2 & 0.43 \\
+\texttt{vqvae\_encoder\_d128} & 128 & 321.1 & 22.4 & 1.04 & 7.23 & \textbf{1.00} & 6.33 & 45.9 & 1.30 & 5.61 & \textbf{1.00} & 5.06 & 33.2 & 0.78 \\
+\texttt{random\_init\_d8} & 8 & 107.6 & 12.9 & -0.04 & 1.53 & 0.13 & 1.47 & 12.5 & 1.45 & 4.25 & 0.93 & 3.68 & 25.1 & -0.25 \\
+\texttt{random\_init\_d32} & 32 & 194.9 & 15.4 & 0.74 & 3.14 & 0.69 & 2.95 & 21.8 & 1.60 & 5.09 & 0.92 & 4.57 & 25.8 & 0.69 \\
+\texttt{random\_init\_d64} & 64 & 164.7 & 14.5 & 0.60 & 4.01 & 0.85 & 3.63 & 27.4 & 1.55 & 5.30 & 0.99 & 4.66 & 28.7 & 0.14 \\
+\midrule
+\multicolumn{15}{l}{\textit{Zero-Network Physics Baselines (Deterministic Summaries and Classical Observables)}} \\
+\texttt{raw\_summary\_d28} (28-D summary) & 28 & 333.9 & 24.1 & 2.22 & 8.09 & \textbf{1.00} & 6.91 & 43.6 & 1.20 & 5.12 & 0.97 & 4.61 & 27.8 & 0.20 \\
+\texttt{pca\_summary\_d8} (top-8 PCA) & 8 & 209.1 & 17.9 & 2.59 & 9.19 & \textbf{1.00} & 7.56 & 47.8 & 0.81 & 3.48 & 0.63 & 3.23 & 17.9 & 0.03 \\
+\texttt{phys\_handcrafted\_d6} (6-D obs.) & 6 & 91.4 & 12.0 & \textbf{8.91} & \textbf{28.42} & \textbf{1.00} & \textbf{15.93} & \textbf{134.7} & \textbf{2.18} & \textbf{8.63} & \textbf{1.00} & \textbf{6.64} & \textbf{50.2} & \textbf{1.27} \\
+\texttt{mult\_only\_d1} ($N_{\text{tracks}}$ only) & 1 & 8.1 & 3.6 & 1.28 & 4.71 & 0.72 & 3.23 & 27.2 & -0.78 & 0.16 & 0.00 & 0.30 & 9.1 & 0.88 \\
+\bottomrule
+\multicolumn{15}{l}{\footnotesize $^\ddagger$Earlier Post-LN checkpoint \texttt{ssl\_tokens\_legacy\_d64} yielded $\text{SNR}_{1\%} = 3.87$ on $\text{HP}_{\text{v2}}$ and $4.74$ on HV.}
+\end{tabular}%
+}
+}
+\end{table}
+
+\begin{table}[t!]
+\dmfloat{%
+\centering
+\caption{Conditional $10,000$-null Kernel NPLM benchmark across 16 representative models ($5,000$ calibration nulls plus $5,000$ validation nulls; $200$ paired signal toys per point). Columns report out-of-sample validation false-positive rates, empirical power at $\alpha = 10^{-3}$ with $95\%$ Clopper-Pearson intervals at $1.0\%$ injection, and standardised median shift $\text{SNR}$ with $[q_{16}, q_{84}]$ intervals at $1.0\%$ injection.}
+\label{tab:nplm_highstats}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llcc|ccc|ccc}
+\toprule
+& & \multicolumn{2}{c|}{\textbf{Validation FPR ($5\text{k}$)}} & \multicolumn{3}{c|}{\textbf{Higgs Portal \texttt{v2} (Displaced LLP)}} & \multicolumn{3}{c}{\textbf{Hidden Valley (Dark Shower)}} \\
+\textbf{Model} & $D$ & $\alpha=10^{-2}$ & $\alpha=10^{-3}$ & $\textbf{Pow}_{10^{-3}}\text{ (0.5\%)}$ & $\textbf{Pow}_{10^{-3}}\text{ (1.0\%) [95\% CI]}$ & $\textbf{SNR}_{1\%}\text{ }[q_{16},q_{84}]$ & $\textbf{Pow}_{10^{-3}}\text{ (0.5\%)}$ & $\textbf{Pow}_{10^{-3}}\text{ (1.0\%) [95\% CI]}$ & $\textbf{SNR}_{1\%}\text{ }[q_{16},q_{84}]$ \\
+\midrule
+\texttt{supcon\_d64} & 64 & 0.0090 & 0.0016 & 0.035 & 0.695 [0.626, 0.758] & 3.57 [2.49, 4.82] & \textbf{1.000} & \textbf{1.000 [0.982, 1.000]} & \textbf{34.97 [32.87, 37.27]} \\
+\texttt{supervised\_e2e\_d64} & 64 & 0.0118 & 0.0016 & 0.000 & 0.185 [0.134, 0.246] & 2.38 [1.26, 3.35] & 0.550 & \textbf{1.000 [0.982, 1.000]} & 14.89 [13.48, 16.37] \\
+\midrule
+\texttt{ssl\_kinematic\_d32} & 32 & 0.0094 & 0.0000 & 0.005 & 0.615 [0.544, 0.683] & 4.20 [2.68, 5.17] & 0.000 & 0.595 [0.523, 0.664] & 4.17 [2.97, 5.20] \\
+\texttt{ssl\_kinematic\_d64} & 64 & 0.0114 & 0.0004 & 0.005 & 0.485 [0.414, 0.557] & 3.48 [2.12, 4.49] & 0.010 & 0.770 [0.705, 0.826] & 4.14 [3.26, 5.26] \\
+\texttt{ssl\_tokens\_d8} & 8 & 0.0078 & 0.0014 & 0.045 & 0.960 [0.923, 0.983] & 5.58 [4.37, 7.03] & 0.085 & 0.995 [0.972, 1.000] & 6.83 [5.60, 8.59] \\
+\texttt{ssl\_tokens\_d32} & 32 & 0.0082 & 0.0010 & 0.025 & 0.790 [0.727, 0.844] & 4.19 [3.04, 5.46] & 0.015 & 0.925 [0.879, 0.957] & 4.84 [3.84, 6.22] \\
+\texttt{ssl\_tokens\_d64} & 64 & 0.0088 & 0.0004 & 0.030 & 0.720 [0.652, 0.781] & 4.04 [2.95, 5.26] & 0.025 & 0.870 [0.815, 0.913] & 4.86 [3.60, 6.19] \\
+\midrule
+\texttt{ae\_transformer\_d32} & 32 & 0.0078 & 0.0010 & 0.090 & \textbf{1.000 [0.982, 1.000]} & 7.83 [6.38, 9.38] & 0.080 & \textbf{1.000 [0.982, 1.000]} & 6.56 [5.13, 7.80] \\
+\texttt{ae\_mlp\_d32} & 32 & 0.0106 & 0.0014 & 0.155 & \textbf{1.000 [0.982, 1.000]} & 8.19 [6.64, 9.82] & 0.030 & 0.915 [0.867, 0.950] & 4.74 [3.65, 6.04] \\
+\texttt{vqvae\_code\_d8} (pure $\mathbf{z}_e$) & 8 & 0.0104 & 0.0020 & 0.850 & \textbf{1.000 [0.982, 1.000]} & 17.34 [14.93, 19.72] & 0.000 & 0.070 [0.039, 0.115] & 1.65 [0.68, 2.63] \\
+\texttt{vqvae\_quant\_d8} (pure $\mathbf{z}_q$) & 8 & 0.0082 & 0.0010 & 0.830 & \textbf{1.000 [0.982, 1.000]} & 17.11 [14.90, 19.46] & 0.000 & 0.045 [0.021, 0.084] & 1.57 [0.48, 2.53] \\
+\texttt{random\_init\_d64} & 64 & 0.0092 & 0.0006 & 0.005 & 0.550 [0.478, 0.620] & 3.54 [2.33, 4.85] & 0.030 & 0.965 [0.929, 0.986] & 5.07 [3.99, 6.41] \\
+\midrule
+\texttt{raw\_summary\_d28} (no NN) & 28 & 0.0082 & 0.0016 & 0.250 & \textbf{1.000 [0.982, 1.000]} & 8.67 [6.97, 10.28] & 0.060 & 0.975 [0.943, 0.992] & 5.30 [4.11, 6.57] \\
+\texttt{pca\_summary\_d8} (no NN) & 8 & 0.0102 & 0.0020 & 0.305 & \textbf{1.000 [0.982, 1.000]} & 9.81 [8.15, 11.86] & 0.010 & 0.560 [0.488, 0.630] & 3.44 [2.39, 4.49] \\
+\texttt{phys\_handcrafted\_d6} (no NN) & 6 & 0.0132 & 0.0010 & \textbf{1.000} & \textbf{1.000 [0.982, 1.000]} & \textbf{28.02 [24.70, 31.61]} & 0.095 & \textbf{1.000 [0.982, 1.000]} & 8.80 [6.78, 10.40] \\
+\texttt{mult\_only\_d1} (no NN) & 1 & 0.0102 & 0.0004 & 0.015 & 0.480 [0.409, 0.552] & 4.64 [2.86, 7.17] & 0.000 & 0.000 [0.000, 0.018] & 0.44 [-0.64, 1.69] \\
+\bottomrule
+\end{tabular}%
+}
+}
+\end{table}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_nplm_significance_curves.pdf}
+    \caption{Conditional $10,000$-null shape-only Kernel NPLM detection curves across signal fractions from $0.25\%$ to $2.5\%$, with $200$ signal toys per point. Panels (a) and (b) show empirical power at $\alpha = 10^{-2}$ with $95\%$ Clopper-Pearson bands. Panels (c) and (d) show the standardised median shift $\text{SNR}$ with $[q_{16}, q_{84}]$ intervals. The left column is \texttt{higgs\_portal\_v2} and the right column is \texttt{hidden\_valley}.}
+    \label{fig:nplm_curves}
+}
+\end{figure}
+
+\begin{dmbox}[New Subsection: Anomaly Detection Results]
+\subsection{Sensitivity Across Signal Topologies}
+\label{sec:nplm_results}
+
+Results from the 250-null 33-model sweep and the $10,000$-null 16-model benchmark are shown in Tables~\ref{tab:nplm} and~\ref{tab:nplm_highstats} and Fig.~\ref{fig:nplm_curves}. Model rankings reverse between the two BSM topologies and differ from the supervised transfer rankings of Table~\ref{tab:probes}.
+
+On \texttt{hidden\_valley}, SM-supervised encoders have the highest Kernel NPLM sensitivity in Table~\ref{tab:nplm_highstats}. \texttt{supcon\_d64} reaches $\text{SNR}_{1\%} = 34.97$, with unit empirical power at $\alpha = 10^{-3}$ down to $0.5\%$ injection. On displaced \texttt{higgs\_portal\_v2} at $1.0\%$ injection, by contrast, \texttt{supervised\_e2e\_d64} drops to $\text{Pow}_{10^{-3}} = 0.185$ and $\text{SNR}_{1\%} = 2.38$. \texttt{supcon\_d64} reaches $\text{Pow}_{10^{-3}} = 0.695$ and $\text{SNR}_{1\%} = 3.57$. Among neural representations on \texttt{higgs\_portal\_v2}, the eight-dimensional VQ-VAE poolings \texttt{vqvae\_code\_d8} and \texttt{vqvae\_quant\_d8} are highest, with $\text{SNR}_{1\%} = 17.34$ and $17.11$. Their power at $0.5\%$ injection is $\text{Pow}_{10^{-3}} = 0.850$ and $0.830$. The 28-feature summary bottlenecks follow, with $\text{SNR}_{1\%} = 8.19$ for \texttt{ae\_mlp\_d32} and $\text{SNR}_{1\%} = 7.83$ for \texttt{ae\_transformer\_d32}. Tokenised SSL models have balanced power across both channels: on this channel, \texttt{ssl\_tokens\_d8} reaches $\text{SNR}_{1\%} = 5.58$ and $\text{Pow}_{10^{-3}} = 0.960$. Across all 33 representations, the deterministic six-observable baseline \texttt{phys\_handcrafted\_d6} attains the highest \texttt{higgs\_portal\_v2} sensitivity, at $\text{SNR}_{1\%} = 28.02$ with unit power at $0.5\%$ injection. This ordering is unchanged across five independent reference draws and in the $N_B = 25,000$ low-overlap check. Across the five draws we find $\text{SNR}_{1\%} = 27.3 \pm 2.5$ for \texttt{phys\_handcrafted\_d6}, $17.9 \pm 1.9$ for \texttt{vqvae\_quant\_d8}, and $4.3 \pm 0.6$ for \texttt{supcon\_d64}.
+\end{dmbox}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_nplm_v1_vs_v2.pdf}
+    \caption{Shape-only Kernel NPLM standardised median shift $\text{SNR}$ comparing (a) legacy prompt \texttt{higgs\_portal\_v1} against (b) corrected displaced \texttt{higgs\_portal\_v2} across signal fractions from $0.5\%$ to $5.0\%$.}
+    \label{fig:nplm_v1_v2}
+}
+\end{figure}
+
+\begin{figure}[t]
+\dmfloat{%
+    \centering
+    \includegraphics[width=0.97\textwidth]{fig_physics_controls_2x2.pdf}
+    \caption{Tracking factorial and kernel-geometry controls. Panel (a) shows truth-matched ACTS inside-out tracking efficiency ($p_T > 1\text{ GeV}$, $|\eta| < 3.0$) versus transverse production radius $r_{xy}$ across the $2\times 2$ factorial arms. Panel (b) compares $1\%$ shape-only NPLM $\text{SNR}$ across prompt \texttt{v1} $+ 3\text{ T}$, SM-matched displaced \texttt{v2} $+ 2\text{ T}$, multiplicity-reweighted \texttt{v2} $+ 2\text{ T}$, and $(d_0, z_0)=0$ masked \texttt{v2} $+ 2\text{ T}$. Panel (c) compares diagonal standardisation against shrinkage ZCA correlation whitening ($\gamma = 10^{-2}$) on $\mathcal{R}$.}
+    \label{fig:physics_controls}
+}
+\end{figure}
+
+\begin{table}[t!]
+\dmfloat{%
+\centering
+\caption{Summary of mechanistic controls and uncertainty checks. Part A reports the matched $T=128$ augmentation control and three-seed pretraining mean $\pm$ SD at $D=64$. Part B reports five-draw low-label SM-3 accuracy for from-scratch training, frozen linear probes, and LP-FT fine-tuning. Part C reports seed-1 binary linear probe tail recall at held-out SM $\text{FPR} \in \{10^{-1}, 10^{-3}, 10^{-4}\}$ alongside 250-null $1\%$ \texttt{higgs\_portal\_v2} NPLM $\text{SNR}$ across preprocessing and bandwidth settings.}
+\label{tab:controls_phase3}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llcccc}
+\toprule
+\multicolumn{6}{l}{\textbf{(A) $D=64$ Augmentation Control and Three-Seed Pretraining Variability ($250$-Null NPLM Protocol)$^\parallel$}} \\
+\textbf{Configuration} & \textbf{Protocol} & \textbf{SM-3 Lin Acc} & \textbf{Transfer $\text{HP}_{\text{v2}}$ AUC} & \textbf{1\% $\text{HP}_{\text{v2}}$ SNR} & \textbf{1\% HV SNR} \\
+\midrule
+\texttt{ssl\_legacy\_d64} & Legacy $T=256$ (1 seed) & $0.6118$ & $0.8527$ & $2.96$ & $2.84$ \\
+\texttt{ssl\_legacy\_aug\_t128\_d64} & Matched $T=128$ legacy aug (1 seed) & $0.6228$ & $0.8750$ & $3.26$ & $3.40$ \\
+\texttt{ssl\_kinematic\_d64} & Matched $T=128$ kinematic (3 seeds) & $0.6790 \pm 0.0019$ & $0.8930 \pm 0.0060$ & $3.50 \pm 0.45$ & $3.87 \pm 0.18$ \\
+\texttt{ssl\_tokens\_d64} & Unified $T=128$ token SSL (3 seeds)$^\S$ & $0.6858 \pm 0.0079$ & $0.9039 \pm 0.0026$ & $4.62 \pm 0.25$ & $5.31 \pm 0.85$ \\
+\midrule
+\multicolumn{6}{l}{\textbf{(B) Paired Five-Draw SM-3 Classification Accuracy Across Label Budgets (Mean $\pm$ SD)}} \\
+\textbf{Model / Regime} & \textbf{Head / Adaptation} & $N_{\text{labelled}}=100$ & $N_{\text{labelled}}=10^3$ & $N_{\text{labelled}}=10^4$ & $N_{\text{labelled}}=10^5$ \\
+\midrule
+\texttt{supervised\_scratch\_d64} & End-to-end from random init & $0.5228 \pm 0.0721$ & $0.6518 \pm 0.0279$ & $0.7190 \pm 0.0056$ & $0.7608 \pm 0.0024$ \\
+\texttt{ssl\_kinematic\_d64} & Frozen encoder + linear probe & $0.5401 \pm 0.1021$ & $0.6475 \pm 0.0027$ & $0.6673 \pm 0.0006$ & $0.6762 \pm 0.0004$ \\
+\texttt{ssl\_kinematic\_ft\_d64} & Pretrained + LP-FT unfrozen & $0.6124 \pm 0.0340$ & $0.6782 \pm 0.0048$ & $0.7126 \pm 0.0023$ & $0.7451 \pm 0.0004$ \\
+\texttt{ssl\_tokens\_d64} & Frozen encoder + linear probe & $0.5853 \pm 0.0290$ & $0.6621 \pm 0.0042$ & $0.6769 \pm 0.0022$ & $0.6862 \pm 0.0003$ \\
+\texttt{ssl\_tokens\_ft\_d64} & Pretrained + LP-FT token enc.$^\S$ & $0.5865 \pm 0.0269$ & $0.6738 \pm 0.0063$ & $0.7066 \pm 0.0024$ & $0.7323 \pm 0.0007$ \\
+\midrule
+\multicolumn{6}{l}{\textbf{(C) Supervised ROC-Tail Crossover vs.\ $1\%$ \texttt{higgs\_portal\_v2} Kernel NPLM Sensitivity}} \\
+\textbf{Representation} & \textbf{Transfer AUC ($\text{TPR}@10^{-1}$)} & $\textbf{TPR}@\textbf{FPR}=10^{-3}$ & $\textbf{TPR}@\textbf{FPR}=10^{-4}$ & \textbf{NPLM SNR ($q=0.90$)} & \textbf{NPLM SNR ($q=0.25$ / ZCA)} \\
+\midrule
+\texttt{supcon\_d64} ($D=64$) & $0.9414$ ($0.8417$) & $0.0270$ & $0.0034$ & $3.36$ (PCs 1--3: $4.11$) & $2.86$ / $3.46$ \\
+\texttt{ssl\_kinematic\_d64} ($D=64$) & $0.8967$ ($0.6841$) & $0.0435$ & $0.0080$ & $3.63$ ($M=1000$: $3.72$) & $2.92$ / $3.52$ \\
+\texttt{ae\_transformer\_d32} ($D=32$) & $0.9088$ ($0.7355$) & $0.1281$ & $0.0325$ & $7.65$ ($M=1000$: $8.12$) & $5.21$ / $6.42$ \\
+\texttt{vqvae\_quant\_d8} ($D=8$) & $0.9118$ ($0.7332$) & $0.1146$ & $0.0313$ & $18.41$ ($M=1000$: $19.00$) & $7.74$ / $16.89$ \\
+\texttt{raw\_summary\_d28} ($D=28$) & $0.9124$ ($0.7547$) & $0.1402$ & $0.0411$ & $8.09$ ($M=1000$: $8.72$) & $4.72$ / $6.92$ \\
+\texttt{phys\_handcrafted\_d6} ($D=6$) & $0.9297$ ($0.7816$) & $0.0792$ & $0.0122$ & $28.42$ ($M=1000$: $29.44$) & $16.69$ / $23.15$ \\
+\bottomrule
+\multicolumn{6}{l}{\footnotesize $^\parallel$Matched $T=128$ continuous SSL rows share the identical Pre-LN trainer, 20-epoch cosine schedule, and two-view SimCLR batching.} \\
+\multicolumn{6}{l}{\footnotesize $^\S$Tokenised SSL seed and fine-tuning numbers condition on the fixed SM-pretrained $K=8192$ VQ-VAE tokeniser.}
+\end{tabular}%
+}
+}
+\end{table}
+
+\begin{dmbox}[New Subsection: Factorial Tracking, Masking, and Subspace Controls]
+\subsection{Factorial Tracking, Masking, and Subspace Controls}
+\label{sec:physics_controls}
+
+To separate detector reconstruction effects from representation geometry, we perform three sets of controlled ablations summarised in Figs.~\ref{fig:nplm_v1_v2} and~\ref{fig:physics_controls} and Table~\ref{tab:controls_phase3}:
+
+\paragraph{Factorial seeding and inside-out tracking efficiency.}
+We match truth charged particles with $p_T > 1\text{ GeV}$ and $|\eta| < 3.0$ to reconstructed tracks via five-tuple hit barcodes, using $5,000$ events per arm of the $40,000$-event $2\times 2$ campaign. Fake rates are near $1.0\%$. Efficiencies for $2.0\text{ T}$ and $3.0\text{ T}$ seeding agree within $0.1$ percentage points in every radial bin of displaced \texttt{v2} in Fig.~\ref{fig:physics_controls}(a). Efficiency falls from $61.9\%$ below $r_{xy} = 1\text{ mm}$ to $9.3\%$ between $30$ and $70\text{ mm}$, and to $0.03\%$ beyond $150\text{ mm}$. On prompt events, \texttt{v1\_prompt\_2T} and \texttt{v1\_prompt\_3T} both remain near the null, with $\text{SNR}_{1\%} = 0.29$ versus $0.34$ for \texttt{vqvae\_quant\_d8}. Restoring displaced vertices at the SM-matched $2.0\text{ T}$ seeding setting (\texttt{v2\_displaced\_2T}) raises $\text{SNR}_{1\%}$ to $15.51$ for \texttt{vqvae\_quant\_d8} and $27.61$ for \texttt{phys\_handcrafted\_d6}. Seeding at $3.0\text{ T}$ adds a further $\sim 10\%$ shift via soft-track recovery below $0.75\text{ GeV}$.
+
+\paragraph{Multiplicity reweighting and impact-parameter masking.}
+Reweighting \texttt{v2\_displaced\_2T} toys to match the SM track-multiplicity histogram reduces \texttt{mult\_only\_d1} from $\text{SNR}_{1\%} = 5.31$ to $0.06$ in Fig.~\ref{fig:physics_controls}(b). Kinematic-shape sensitivity remains, with $\text{SNR}_{1\%} = 16.82$ for \texttt{phys\_handcrafted\_d6} and $5.69$ for \texttt{vqvae\_quant\_d8}. Conversely, we set $d_0 = z_0 = 0$ on both SM and signal events before scaling and recalibration. Multiplicity-reweighted $\text{SNR}_{1\%}$ then drops from $4.46$ to $0.34$ in \texttt{raw\_summary\_d28}. In \texttt{vqvae\_quant\_d8} it drops from $5.69$ to $1.10$. In \texttt{supcon\_d64} it changes from $3.01$ to $3.16$. Summary and VQ-VAE sensitivity to \texttt{higgs\_portal\_v2} therefore depends on non-zero impact-parameter inputs, supplemented in unmatched samples by the inside-out multiplicity deficit.
+
+\paragraph{ROC-tail crossover and coordinate dilution.}
+\texttt{supcon\_d64} achieves a supervised binary ROC-AUC of $0.9414$ on \texttt{higgs\_portal\_v2}. This is higher than the $0.9118$ of \texttt{vqvae\_quant\_d8} and the $0.9125$ of \texttt{raw\_summary\_d28}. Its NPLM sensitivity at $1\%$ injection is nevertheless two- to fivefold lower. Part (C) of Table~\ref{tab:controls_phase3} shows two effects that combine:
+\begin{enumerate}
+    \item \emph{ROC-curve crossover in the high-purity tail.} We evaluate the published binary linear probes against $702,000$ held-out SM events. At bulk $\text{FPR} = 10^{-1}$, which governs integrated ROC-AUC, signal recall is $84.2\%$ for \texttt{supcon\_d64} and $73.3\%$ for \texttt{vqvae\_quant\_d8}. At $\text{FPR} = 10^{-3}$ and $10^{-4}$, however, the ROC curves have crossed. \texttt{supcon\_d64} drops to $2.7\%$ and $0.34\%$ recall, because \texttt{higgs\_portal\_v2} populates the region between SM class lobes (Fig.~\ref{fig:latent_pca}a). Recall is $11.5\%$ and $3.13\%$ for \texttt{vqvae\_quant\_d8}. It is $12.8\%$ and $3.25\%$ for \texttt{ae\_transformer\_d32}, and $14.0\%$ and $4.11\%$ for \texttt{raw\_summary\_d28}. These three representations retain four to twelve times higher extreme-tail efficiency, where SM density is sparse. Small-fraction goodness-of-fit non-centrality scales quadratically with high-likelihood-ratio tails. Accordingly, \texttt{supcon\_d64} remains near $\text{SNR}_{1\%} \approx 3$ to $4$ in every setting we tested: every SM PCA subspace, ZCA shrinkage parameter $\gamma \in [10^{-6}, 10^{-1}]$, kernel quantile $q \in [0.10, 0.90]$, and $M \in \{316, 1000\}$ centres.
+    \item \emph{Isotropic Euclidean dilution across ambient dimension.} A higher-dimensional representation can preserve high linear extreme-tail recall: at $\text{FPR} = 10^{-3}$ it is $12.8\%$ for \texttt{ae\_transformer\_d32} and $14.0\%$ for \texttt{raw\_summary\_d28}. An unlabelled isotropic RBF kernel nevertheless weights all $D$ standardised coordinates equally in $\|\mathbf{z} - \mathbf{c}_i\|^2$, and these two representations yield $\text{SNR}_{1\%} = 7.65$ and $8.09$. Compressing displaced-track tail observables into $D = 8$ or $6$ coordinates avoids diluting those directions across dozens of background-dominated coordinates: \texttt{vqvae\_quant\_d8} reaches $18.41$ and \texttt{phys\_handcrafted\_d6} reaches $28.42$.
+\end{enumerate}
+\end{dmbox}
+
+\section{Conclusion and Outlook}
+\label{sec:conclusion}
+
+\begin{dmbox}[New Section: Conclusion and Data Availability]
+We have evaluated 33 neural and deterministic track-level event representations alongside from-scratch and fine-tuned baselines across $1.95\times 10^6$ zero-pileup simulated proton-proton collisions from ColliderML, enforcing zero event overlap between pretraining and downstream evaluation. We draw five conclusions:
+\begin{enumerate}
+    \item With the Pre-LN Set Transformer and training schedule held fixed in our matched control, replacing legacy rigid-rotation plus independent $(p, p_T)$ Gaussian noise with kinematically consistent spherical smearing raises three-class SM linear probe accuracy from $62.3\%$ to a three-seed mean of $67.9\%$.
+    \item An $8192$-code contextual VQ-VAE tokeniser trained solely on SM tracks uses $100\%$ of its codebook. It retains $97.5\%$ recall on reconstructed displaced tracks with $|d_0| > 1\text{ mm}$ and saturates beyond $10\text{ mm}$. Probe and NPLM sensitivity match between pre-quantisation and post-quantisation poolings.
+    \item Compared with training the identical Set Transformer from random weights, unlabelled SSL pretraining improves low-label three-class SM accuracy and seed stability at $N_{\text{labelled}} = 100$ and $1,000$, while two-stage LP-FT fine-tuning removes the frozen-probe ceiling at $10^4$ and $10^5$ labelled events.
+    \item Under conditional $10,000$-null Kernel NPLM calibration, representation rankings depend on signal topology and differ from bulk ROC-AUC rankings. SM-supervised encoders lead Hidden Valley dark-shower detection, whereas eight-dimensional VQ-VAE poolings and six-dimensional displaced-track observables lead on displaced Higgs Portal decays. We attribute the latter to higher extreme-tail recall at $\text{FPR} \le 10^{-3}$ and lower coordinate dilution in isotropic kernels.
+    \item A $40,000$-event $2\times 2$ tracking factorial, multiplicity reweighting, and $(d_0, z_0)=0$ masking show that \texttt{higgs\_portal\_v2} sensitivity arises from macroscopic vertex displacement rather than track-seeding field settings. These results motivate subspace-aware two-sample metrics, and extensions to high-pileup ColliderML tracking at $\langle\mu\rangle = 200$ with dedicated large-radius reconstruction~\cite{ATLASLRT2023}.
+\end{enumerate}
+
+\paragraph{Data and code availability.}
+All ColliderML Release 1 samples, including the corrected zero-pileup and high-pileup \texttt{higgs\_portal} (\texttt{v2}) datasets, are publicly accessible via Hugging Face~\cite{ColliderMLDataset} and the NERSC web portal at \url{https://portal.nersc.gov/cfs/m4958/ColliderML/}. Analysis, training, and GPU Newton-Raphson NPLM calibration scripts are maintained in the project repository.
+\end{dmbox}
+
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+
+\clearpage
+\appendix
+\section{Results}
+\label{sec:results}
+\todo{Placeholder plots to understand which plots to include in the final paper. Also, modify the legends and beautify it. Aritra}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/SSL CL accuracy.png}
+        \caption{Classification Accuracy (Self Supervised CL)}
+        \label{fig:sslcl_acc}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/Supverised CL accuracy.png}
+        \caption{Classification Accuracy (Supervised CL)}
+        \label{fig:supcl_acc}
+    \end{subfigure}
+    \caption{Comparison of accuracy for the two contrastive learning cases.}
+    \label{fig:accuracy_cl}
+\end{figure}
+\todo{Make the accuracy (and AUC) plots for d = 2,4,8,16,32 using the new Higgs Portal events}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/SSL CL accuracy.png}
+        \caption{Classification Accuracy (Transformer encoder)}
+        \label{fig:transformer_acc}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/Supverised CL accuracy.png}
+        \caption{Classification Accuracy (MLP encoder)}
+        \label{fig:mlp_acc}
+    \end{subfigure}
+    \caption{Comparison of accuracy for the two autoencoding cases.}
+    \label{fig:accuracy_ae}
+\end{figure}
+\todo{Replace the SSL plots with the AE plots}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/Contrastive_AUC_vs_D.png}
+        \caption{Classification AUC(Contrastive Learning)}
+        \label{fig:transformer_acc}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/Autoencoder_AUC_vs_D.png}
+        \caption{Classification AUC(Autoencoders)}
+        \label{fig:mlp_acc}
+    \end{subfigure}
+    \caption{Comparison of AUC for different cases.}
+    \label{fig:comparison}
+\end{figure}
+\todo{Same as before, do it for d=2,4,8,16,32}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/SSL NPLM.png}
+        \caption{Asymptotic Z scores(Self Supervised CL)}
+        \label{fig:ssl_nplm}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Plots/SUP CL NPLM.png}
+        \caption{Asymptotic Z scores(Supervised CL)}
+        \label{fig:supcl_nplm}
+    \end{subfigure}
+    \caption{Z scores for contrastive learning.}
+    \label{fig:nplm_scores}
+\end{figure}
+
+\begin{tcolorbox}[colback=white, colframe=black, width=1\textwidth]
+\textbf{These plots aren't final and are kept to take note of the kind of plots we have made till now, and the ones which we want to add. I'll make them all together when doing the run with the newer Higgs Portal events. 
+Also, I have been able to run Marco's optimized version of NPLM, so I think we will use that for our final plots. Also, we have results from the vanilla transformer that used the raw information, but I think we will add it in the evaluation part in the earlier sections, like we discussed last time.} 
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=white, colframe=black, width=1\textwidth]
+\textbf{Quick Question: Do we report the NPLM Z values separately for each BSM process, or should they be combined. I mean, in the "data" dataset, should we have events from both process together or one at a time. I think we should do one at a time. Till now, in the data dataset, we were using SM+BSM process, where BSM included both hidden valley and higgs portal. I suggest, we do it separately, once with SM+hidden valley and another time with SM+higgs portal. } 
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=white, colframe=black, width=1\textwidth]
+\textbf{I think, instead of having 1,2.5,5 injection fraction, we should use 0.25,0.5,1 injection fractions. This is because, with lower injection fraction, the Z values stays around the middle, and not in the tail, and since the region around the peak is more well defined, the Z values could be reported with much more surety. Also, if NPLM can find out the deviations (using embeddings as input) for lower injection fractions (so effectively, less number of BSM signals), that means the combination of NPLM and event embeddings as input could be a nice way to find weak signals within the actual observed data, as the chances that the number of BSM events would be low is higher compared to getting higher number of BSM events in the actual data } 
+\end{tcolorbox}
+
+
+
+\begin{dmbox}[Collaboration Note: Replies to the Three Discussion Boxes Above]
+\begin{enumerate}
+    \item \emph{Updated Higgs Portal events, optimised NPLM, and raw-track Transformer.} All tables and figures in Sections~\ref{sec:dataset} to~\ref{sec:nplm} use the regenerated displaced \texttt{higgs\_portal\_v2} events alongside the $2\times 2$ seeding factorial, our GPU \texttt{float64} Newton-Raphson Kernel NPLM solver, and the raw-track Set Transformer baselines (\texttt{supervised\_e2e\_d64} and low-label \texttt{supervised\_scratch\_d64}). Your exploratory plots and notes above are preserved in this appendix for comparison.
+    \item \emph{Separate BSM evaluation in NPLM.} Agreed: every NPLM test in Tables~\ref{tab:nplm_shape} and~\ref{tab:nplm_highstats} and Figs.~\ref{fig:nplm_curves} and~\ref{fig:nplm_v1v2} evaluates $\text{SM} + \texttt{higgs\_portal\_v2}$ and $\text{SM} + \texttt{hidden\_valley}$ separately rather than combining both BSM channels.
+    \item \emph{Lower signal injection fractions.} Agreed: our conditional $10,000$-null benchmark (Table~\ref{tab:nplm_highstats} and Fig.~\ref{fig:nplm_curves}) evaluates low signal fractions at $0.25\%$, $0.5\%$, and $1.0\%$ using empirical order-statistic thresholds and distribution-free $\text{SNR}$ intervals.
+\end{enumerate}
+\end{dmbox}
+
+\end{document}

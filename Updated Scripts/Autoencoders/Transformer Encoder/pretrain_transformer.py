@@ -150,9 +150,14 @@ class SetTransformerEncoder(nn.Module):
             nhead=n_heads,
             dim_feedforward=ffn_dim,
             dropout=dropout,
+            activation="gelu",
             batch_first=True,
+            norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(layer, num_layers=n_layers)
+        self.transformer = nn.TransformerEncoder(
+            layer, num_layers=n_layers, enable_nested_tensor=False
+        )
+        self.out_norm = nn.LayerNorm(model_dim)
         self.latent_dim = latent_dim
         self.out_proj = nn.Linear(model_dim, latent_dim)
 
@@ -167,7 +172,7 @@ class SetTransformerEncoder(nn.Module):
         full_mask = torch.cat([cls_mask, mask], dim=1)
 
         x = self.transformer(x, src_key_padding_mask=~full_mask)
-        return self.out_proj(x[:, 0, :])
+        return self.out_proj(self.out_norm(x[:, 0, :]))
 
 
 class AEDecoder(nn.Module):
